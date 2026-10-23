@@ -26,8 +26,8 @@ def ma7(s, h):
 
 def holt_winters(s, h):
     holtwinters = import_module("statsmodels.tsa.holtwinters")
-    ExponentialSmoothing = holtwinters.ExponentialSmoothing
-    m = ExponentialSmoothing(
+    exponential_smoothing = holtwinters.ExponentialSmoothing
+    m = exponential_smoothing(
         np.array(s, dtype=float),
         trend="add",
         damped_trend=True,
@@ -51,8 +51,13 @@ def mape(a, f):
 
 
 def result(method, daily, low, **extra):
-    return {"method": method, "lowConfidence": low, "daily": [round(x, 2) for x in daily],
-            "demand": int(round(sum(daily))), **extra}
+    return {
+        "method": method,
+        "lowConfidence": low,
+        "daily": [round(x, 2) for x in daily],
+        "demand": int(round(sum(daily))),
+        **extra,
+    }
 
 
 @app.get("/health")
@@ -71,7 +76,8 @@ def forecast(r: Req):
         base, hw = ma7(train, test), holt_winters(train, test)
         m_base, m_hw = mae(actual, base), mae(actual, hw)
         info = {"mae": round(m_hw, 3), "mape": round(mape(actual, hw), 1),
-                "baselineMae": round(m_base, 3), "baselineMape": round(mape(actual, base), 1)}
+                "baselineMae": round(m_base, 3),
+                "baselineMape": round(mape(actual, base), 1)}
         if m_hw < m_base:  # chỉ dùng mô hình chính nếu tốt hơn mô hình cơ sở
             return result("holt_winters", holt_winters(s, h), False, **info)
         return result("moving_average", ma7(s, h), False, **info)
