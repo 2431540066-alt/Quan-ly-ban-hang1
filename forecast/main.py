@@ -1,3 +1,5 @@
+"""Forecast daily sales using baseline and Holt-Winters methods."""
+
 import warnings
 import numpy as np
 from fastapi import FastAPI
@@ -36,7 +38,9 @@ def mae(a, f):
 def mape(a, f):
     a, f = np.array(a), np.array(f)
     nz = a > 0
-    return float(np.mean(np.abs((a[nz] - f[nz]) / a[nz])) * 100) if nz.any() else 0.0
+    if nz.any():
+        return float(np.mean(np.abs((a[nz] - f[nz]) / a[nz])) * 100)
+    return 0.0
 
 
 def result(method, daily, low, **extra):
