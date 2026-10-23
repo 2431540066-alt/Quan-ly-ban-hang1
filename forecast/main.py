@@ -1,10 +1,10 @@
 """Forecast daily sales using baseline and Holt-Winters methods."""
 
 import warnings
+from importlib import import_module
 import numpy as np
 from fastapi import FastAPI
 from pydantic import BaseModel
-from statsmodels.tsa.holtwinters import ExponentialSmoothing
 
 warnings.filterwarnings("ignore")
 app = FastAPI()
@@ -25,9 +25,16 @@ def ma7(s, h):
 
 
 def holt_winters(s, h):
-    m = ExponentialSmoothing(np.array(s, dtype=float), trend="add", damped_trend=True,
-                             seasonal="add", seasonal_periods=7,
-                             initialization_method="estimated").fit()
+    holtwinters = import_module("statsmodels.tsa.holtwinters")
+    ExponentialSmoothing = holtwinters.ExponentialSmoothing
+    m = ExponentialSmoothing(
+        np.array(s, dtype=float),
+        trend="add",
+        damped_trend=True,
+        seasonal="add",
+        seasonal_periods=7,
+        initialization_method="estimated",
+    ).fit()
     return [max(0.0, float(x)) for x in m.forecast(h)]
 
 
