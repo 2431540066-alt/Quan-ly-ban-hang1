@@ -1,37 +1,54 @@
-# Hệ thống quản lý bán hàng – Nhóm 13
+# Hệ thống quản lý bán hàng
 
-Bán hàng (POS) · Quản lý kho · Báo cáo & dự báo nhập hàng.
-React + Vite + Tailwind · Node/Express + JWT · PostgreSQL + Prisma · FastAPI + statsmodels.
+Cửa hàng trực tuyến cho khách vãng lai và khách có tài khoản; bán hàng tại quầy; quản lý đơn hàng, khách hàng, sản phẩm, kho, nhà cung cấp, khuyến mãi; báo cáo, dự báo nhập và trợ lý phân tích nội bộ.
 
-Chức năng gồm bán hàng và in hóa đơn, lịch sử đơn, quản lý khách hàng, sản phẩm và danh mục, nhập/xuất kho và kiểm kê, quản lý mã khuyến mãi, báo cáo doanh thu/lợi nhuận, xuất Excel và dự báo nhập hàng. Chủ cửa hàng có toàn quyền; nhân viên bán hàng thao tác POS và khách hàng; thủ kho quản lý sản phẩm và tồn kho.
+**Stack:** React + Vite + Tailwind · Node/Express + JWT · PostgreSQL + Prisma · FastAPI + statsmodels.
 
-## Chạy bằng Docker (khuyên dùng)
+## Chạy bằng Docker
+
 ```bash
 docker compose up --build
 ```
-Mở http://localhost:5173. Lần đầu hệ thống tự tạo bảng và sinh dữ liệu mẫu (120 ngày bán hàng).
 
-Dữ liệu ứng dụng được lưu trong PostgreSQL, giữ lại qua lần dừng/chạy lại nhờ Docker volume `pgdata`. Không xóa volume nếu muốn giữ dữ liệu (`docker compose down -v` sẽ xóa dữ liệu cơ sở dữ liệu).
+Mở http://localhost:5173. Docker Compose khởi chạy PostgreSQL, API, giao diện và dịch vụ dự báo. API tự cập nhật schema và tạo dữ liệu mẫu khi khởi động lần đầu.
 
-| Vai trò | Tài khoản | Mật khẩu |
+| Vai trò | Tài khoản mẫu | Mật khẩu mẫu |
 |---|---|---|
-| Chủ cửa hàng | owner | 123456 |
-| Nhân viên bán hàng | sales | 123456 |
-| Thủ kho | stock | 123456 |
+| Quản trị viên | `owner` | `123456` |
+| Nhân viên bán hàng | `sales` | `123456` |
+| Nhân viên kho | `stock` | `123456` |
+| Khách hàng | `customer` | `123456` |
 
-Mã khuyến mãi mẫu: `GIAM10` (10%), `GIAM20K` (20.000đ), `HETHAN` (đã hết hạn, để thử lỗi).
+Khách cũng có thể xem danh mục sản phẩm mà không cần đăng nhập và tự đăng ký tài khoản. Mật khẩu tài khoản đăng ký phải có ít nhất 8 ký tự.
 
-## Chạy từng phần trong VS Code (không Docker)
-1. PostgreSQL chạy sẵn; `cd server && cp .env.example .env && npm i && npx prisma db push && npm run seed && npm start`
-2. `cd forecast && pip install -r requirements.txt && uvicorn main:app --port 8000`
-3. `cd web && npm i && npm run dev`
+Mã khuyến mãi mẫu: `GIAM10` (10%), `GIAM20K` (20.000 ₫), `HETHAN` (đã hết hạn).
 
-## Cấu trúc nhánh Git gợi ý
-`main` · `feature/sales` · `feature/inventory` · `feature/reports`. Mỗi người làm trên nhánh của mình rồi tạo pull request.
+## Chức năng chính
 
-## Quy tắc nghiệp vụ đã cài
-- Lưu đơn bằng một transaction; trừ kho bằng `UPDATE ... WHERE stock >= qty` nên không bán vượt tồn; lỗi thì hủy toàn bộ.
-- Server tự tính lại giá, giảm giá, tổng tiền (không tin số từ giao diện); mỗi đơn một mã khuyến mãi.
-- Tồn kho chỉ đổi khi phiếu nhập được xác nhận; mọi biến động ghi vào `stock_movements`; giá vốn bình quân gia quyền.
-- Dự báo: Holt-Winters so với trung bình động 7 ngày (MAE/MAPE trên 14 ngày cuối); dưới 28 ngày dữ liệu thì dùng trung bình động, gắn nhãn độ tin cậy thấp.
-- Đề xuất nhập = nhu cầu dự báo + tồn an toàn (min_stock) − tồn hiện tại, không nhỏ hơn 0.
+- **Cửa hàng:** tìm kiếm/lọc sản phẩm, xem mô tả và tình trạng còn hàng, giỏ hàng được lưu trong trình duyệt, đặt đơn giao hàng COD và theo dõi/hủy đơn đang chờ xác nhận.
+- **Quản trị viên:** toàn quyền quản lý, báo cáo doanh thu/giá vốn/lợi nhuận, xuất Excel, xem phân tích AI nội bộ, dự báo nhu cầu và đề xuất nhập hàng.
+- **Nhân viên bán hàng:** POS, quét mã vạch, áp dụng khuyến mãi, chọn khách hàng, in hóa đơn; quản lý khách hàng và trạng thái đơn trực tuyến.
+- **Nhân viên kho:** quản lý sản phẩm/danh mục, nhà cung cấp, phiếu nhập/xuất, kiểm kê và sổ biến động; phối hợp cập nhật trạng thái đơn.
+- **Trợ lý phân tích nội bộ:** tổng hợp doanh thu, sản phẩm bán chạy và cảnh báo tồn kho từ dữ liệu cửa hàng. Dự báo nhu cầu sử dụng Holt-Winters so sánh với MA7; không gửi dữ liệu tới dịch vụ AI bên ngoài.
+
+## Dữ liệu và vận hành
+
+- PostgreSQL lưu dữ liệu nghiệp vụ; Docker volume `pgdata` giữ dữ liệu qua lần khởi động lại.
+- Dừng dịch vụ bằng `docker compose down`. **Không dùng `docker compose down -v` nếu cần giữ dữ liệu**, vì lệnh đó xóa volume cơ sở dữ liệu.
+- Đơn POS được ghi thành giao dịch đã thanh toán. Đơn COD trực tuyến giữ tồn ngay khi đặt, cần nhân viên xác nhận → giao hàng → hoàn tất; hủy đơn trước khi giao sẽ hoàn tồn và ghi sổ kho.
+- Giá, khuyến mãi, tổng tiền và tồn được xác minh ở máy chủ; thao tác bán/nhập/xuất được thực hiện trong transaction để tránh tồn kho âm hoặc cập nhật dở dang.
+- Tài khoản mẫu chỉ dành cho phát triển. Trước khi triển khai thật, thay `JWT_SECRET` trong môi trường, đặt mật khẩu riêng, cấu hình HTTPS và sao lưu PostgreSQL thường xuyên. Không sử dụng dữ liệu mẫu trong môi trường thật.
+
+## Chạy từng phần (không Docker)
+
+1. Khởi động PostgreSQL; cấu hình `server/.env` từ `.env.example`.
+2. Trong `server`: `npm install`, `npx prisma db push`, `npm run seed`, `npm start`.
+3. Trong `forecast`: `pip install -r requirements.txt`, sau đó `uvicorn main:app --port 8000`.
+4. Trong `web`: `npm install`, `npm run dev`.
+
+## Kiểm thử
+
+```bash
+cd server
+npm test
+```

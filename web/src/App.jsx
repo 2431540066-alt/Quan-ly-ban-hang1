@@ -4,14 +4,21 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recha
 // ---------- tiện ích ----------
 async function api(path, { method = 'GET', body } = {}) {
   const r = await fetch('/api' + path, { method, headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + (localStorage.getItem('token') || '') }, body: body && JSON.stringify(body) });
-  if (r.status === 401 && path !== '/login') { localStorage.clear(); location.reload(); }
+  if (r.status === 401 && path !== '/login' && path !== '/register') {
+    localStorage.removeItem('token'); localStorage.removeItem('user'); location.reload();
+  }
   const d = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(d.error || 'Có lỗi xảy ra');
   return d;
 }
 function useLoad(path) {
   const [d, setD] = useState(null), [n, setN] = useState(0), [err, setErr] = useState('');
-  useEffect(() => { setErr(''); api(path).then(setD).catch(e => setErr(e.message)); }, [path, n]);
+  useEffect(() => {
+    let active = true;
+    setErr('');
+    api(path).then(value => { if (active) setD(value); }).catch(error => { if (active) setErr(error.message); });
+    return () => { active = false; };
+  }, [path, n]);
   return [d, () => setN(x => x + 1), err];
 }
 const money = n => Number(n || 0).toLocaleString('vi-VN') + ' ₫';
@@ -26,26 +33,152 @@ const C = {
 const Msg = ({ m }) => m ? <p role="alert" className="text-sm text-red-700 bg-red-50 border border-red-200 rounded px-3 py-2 my-2">{m}</p> : null;
 const Ok = ({ m }) => m ? <p className="text-sm text-teal-800 bg-teal-50 border border-teal-200 rounded px-3 py-2 my-2">{m}</p> : null;
 
-// ---------- đăng nhập ----------
-function Login({ onLogin }) {
-  const [f, setF] = useState({ username: 'owner', password: '123456' }), [err, setErr] = useState('');
-  const go = async e => {
-    e.preventDefault(); setErr('');
-    try { const d = await api('/login', { method: 'POST', body: f }); localStorage.setItem('token', d.token); localStorage.setItem('user', JSON.stringify(d.user)); onLogin(d.user); }
-    catch (x) { setErr(x.message); }
+const orderStatus = {
+  PENDING: 'Chờ xác nhận', CONFIRMED: 'Đã xác nhận', SHIPPING: 'Đang giao',
+  PAID: 'Hoàn tất', CANCELLED: 'Đã hủy',
+};
+function Storefront({ user }) {
+  const [query, setQuery] = useState(''), [categoryId, setCategoryId] = useState('');
+  const [categories, , categoryError] = useLoad('/store/categories');
+  const [products, , loadError] = useLoad(`/store/products?q=${encodeURIComponent(query)}&categoryId=${categoryId}`);
+  const [cart, setCart] = useState(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem('shop-cart') || '[]');
+      return Array.isArray(saved) ? saved.filter(item => item && Number.isInteger(item.id) && Number.isInteger(item.qty) && item.qty > 0) : [];
+    } catch { return []; }
+  });
+  const [selected, setSelected] = useState(null), [mode, setMode] = useState('login');
+  const [form, setForm] = useState({ username: '', password: '', name: '', phone: '' });
+  const [address, setAddress] = useState(''), [code, setCode] = useState(''), [promo, setPromo] = useState(null);
+  const [err, setErr] = useState(''), [ok, setOk] = useState(''), [busy, setBusy] = useState(false);
+  useEffect(() => { localStorage.setItem('shop-cart', JSON.stringify(cart)); }, [cart]);
+  const subtotal = cart.reduce((sum, item) => sum + item.price * item.qty, 0);
+  const discount = promo ? Math.min(subtotal, promo.type === 'PERCENT' ? Math.round(subtotal * promo.value / 100) : promo.value) : 0;
+  const total = subtotal - discount;
+  const add = product => {
+    if (!product.inStock) return;
+    setCart(current => current.some(item => item.id === product.id)
+      ? current.map(item => item.id === product.id ? { ...item, qty: item.qty + 1 } : item)
+      : [...current, { ...product, qty: 1 }]);
+    setSelected(null); setErr(''); setOk('');
+  };
+  const authenticate = async event => {
+    event.preventDefault(); setErr(''); setOk(''); setBusy(true);
+    try {
+      const data = await api(mode === 'register' ? '/register' : '/login', {
+        method: 'POST',
+        body: mode === 'register' ? form : { username: form.username, password: form.password },
+      });
+      localStorage.setItem('token', data.token); localStorage.setItem('user', JSON.stringify(data.user));
+      location.reload();
+    } catch (error) { setErr(error.message); } finally { setBusy(false); }
+  };
+  const checkout = async () => {
+    setErr(''); setOk(''); setBusy(true);
+    try {
+      const order = await api('/customer/orders', {
+        method: 'POST',
+        body: { address, code: promo?.code, items: cart.map(item => ({ productId: item.id, qty: item.qty })) },
+      });
+      setCart([]); setAddress(''); setCode(''); setPromo(null); setOk(`Đặt hàng thành công. Mã đơn #${order.id}; tổng thanh toán ${money(order.total)}, đơn đang chờ cửa hàng xác nhận.`);
+    } catch (error) { setErr(error.message); }
+    finally { setBusy(false); }
   };
   return (
-    <div className="min-h-screen grid place-items-center p-4 bg-[#11263a]">
-      <form onSubmit={go} className="bg-[#f4f4ef] rounded-lg p-8 w-full max-w-sm space-y-3">
-        <h1 className="text-2xl font-semibold">Đăng nhập</h1>
-        <p className="text-stone-600 text-sm">Tài khoản mẫu: owner, sales, stock (mật khẩu 123456)</p>
-        <label className="block text-sm">Tên đăng nhập<input className={C.inp} value={f.username} onChange={e => setF({ ...f, username: e.target.value })} /></label>
-        <label className="block text-sm">Mật khẩu<input type="password" className={C.inp} value={f.password} onChange={e => setF({ ...f, password: e.target.value })} /></label>
-        <Msg m={err} />
-        <button className={C.btn + ' w-full'}>Đăng nhập</button>
-      </form>
+    <div className="min-h-screen">
+      <header className="bg-[#11263a] text-white px-4 py-4 md:px-8 flex flex-wrap items-center gap-3">
+        <div className="mr-auto"><div className="text-xl font-semibold">Cửa hàng của bạn</div><div className="text-xs text-stone-300">Xem hàng và đặt hàng trực tuyến</div></div>
+        {user?.role === 'CUSTOMER' && <span className="text-sm">Xin chào, {user.name}</span>}
+        {user && user.role !== 'CUSTOMER' && <span className="text-sm text-amber-200">Đang xem với tài khoản nhân viên</span>}
+        {user?.role === 'CUSTOMER' && <button className="border border-white/40 rounded px-3 py-2" onClick={() => { localStorage.removeItem('token'); localStorage.removeItem('user'); location.reload(); }}>Đăng xuất</button>}
+      </header>
+      <main className="p-4 md:p-8">
+        <div className="grid lg:grid-cols-[1fr_22rem] gap-5">
+          <section>
+            <div className="flex flex-wrap gap-2 mb-4">
+              <input className={C.inp + ' min-w-56 flex-1'} placeholder="Tìm sản phẩm..." value={query} onChange={event => setQuery(event.target.value)} />
+              <select className={C.inp + ' !w-auto'} value={categoryId} onChange={event => setCategoryId(event.target.value)}>
+                <option value="">Tất cả danh mục</option>{categories?.map(category => <option key={category.id} value={category.id}>{category.name}</option>)}
+              </select>
+            </div>
+            <Msg m={loadError || categoryError} />
+            <div className="grid sm:grid-cols-2 xl:grid-cols-3 gap-3">
+              {products?.map(product => <article key={product.id} className={C.card + ' flex flex-col gap-2'}>
+                <button className="text-left flex-1" onClick={() => setSelected(product)}>
+                  <span className="text-xs text-stone-500">{product.category?.name || 'Sản phẩm'}</span>
+                  <h2 className="font-semibold text-lg">{product.name}</h2>
+                  <p className="text-teal-800 font-semibold">{money(product.price)}</p>
+                  <p className="text-sm text-stone-500">{product.inStock ? 'Còn hàng' : 'Tạm hết hàng'}</p>
+                </button>
+                <button className={C.btn} disabled={!product.inStock} onClick={() => add(product)}>Thêm vào giỏ</button>
+              </article>)}
+            </div>
+            {!products?.length && !loadError && <p className="text-stone-500">Không tìm thấy sản phẩm.</p>}
+          </section>
+          <aside className={C.card + ' h-fit space-y-3'}>
+            <h2 className="text-lg font-semibold">Giỏ hàng ({cart.reduce((sum, item) => sum + item.qty, 0)})</h2>
+            {!cart.length && <p className="text-sm text-stone-500">Chọn sản phẩm để bắt đầu mua hàng.</p>}
+            {cart.map(item => <div key={item.id} className="flex items-center gap-2 text-sm border-t pt-2">
+              <div className="flex-1">{item.name}<div className="text-stone-500">{money(item.price)} × {item.qty}</div></div>
+              <button aria-label={`Giảm ${item.name}`} className={C.btn2} onClick={() => setCart(items => items.map(row => row.id === item.id ? { ...row, qty: row.qty - 1 } : row).filter(row => row.qty > 0))}>−</button>
+              <button aria-label={`Tăng ${item.name}`} className={C.btn2} onClick={() => setCart(items => items.map(row => row.id === item.id ? { ...row, qty: row.qty + 1 } : row))}>+</button>
+              <button aria-label={`Xóa ${item.name}`} className="text-red-700 px-1" onClick={() => setCart(items => items.filter(row => row.id !== item.id))}>✕</button>
+            </div>)}
+            <div className="space-y-1 border-t pt-2 text-sm"><div className="flex justify-between"><span>Tạm tính</span><span>{money(subtotal)}</span></div><div className="flex justify-between"><span>Giảm giá</span><span>-{money(discount)}</span></div><div className="flex justify-between text-base font-semibold"><span>Tổng thanh toán</span><span>{money(total)}</span></div></div>
+            {user?.role === 'CUSTOMER' && <>
+              <div className="flex gap-2"><input className={C.inp} placeholder="Mã khuyến mãi" value={code} onChange={event => { setCode(event.target.value.toUpperCase()); setPromo(null); }} /><button className={C.btn2} disabled={!code.trim()} onClick={async () => { setErr(''); setPromo(null); try { setPromo(await api('/promotions/validate', { method: 'POST', body: { code } })); } catch (error) { setErr(error.message); } }}>Áp dụng</button></div>
+              <label className="text-sm block">Địa chỉ nhận hàng<textarea required minLength="8" maxLength="500" className={C.inp} rows="3" value={address} onChange={event => setAddress(event.target.value)} placeholder="Số nhà, đường, phường/xã, quận/huyện, tỉnh/thành" /></label>
+              <p className="text-xs text-stone-500">Thanh toán khi nhận hàng (COD). Tồn kho được giữ sau khi đặt đơn.</p>
+              <button className={C.btn + ' w-full'} disabled={!cart.length || !address.trim() || busy} onClick={checkout}>{busy ? 'Đang đặt hàng...' : 'Đặt hàng'}</button>
+            </>}
+            {!user && <form onSubmit={authenticate} className="border-t pt-3 space-y-2">
+              <div className="flex gap-2"><button type="button" className={mode === 'login' ? C.btn : C.btn2} onClick={() => setMode('login')}>Đăng nhập</button><button type="button" className={mode === 'register' ? C.btn : C.btn2} onClick={() => setMode('register')}>Tạo tài khoản</button></div>
+              {mode === 'register' && <>
+                <label className="text-sm block">Họ tên<input required maxLength="120" className={C.inp} value={form.name} onChange={event => setForm({ ...form, name: event.target.value })} /></label>
+                <label className="text-sm block">Số điện thoại<input type="tel" maxLength="30" className={C.inp} value={form.phone} onChange={event => setForm({ ...form, phone: event.target.value })} /></label>
+              </>}
+              <label className="text-sm block">Tên đăng nhập<input required minLength="3" maxLength="32" className={C.inp} value={form.username} onChange={event => setForm({ ...form, username: event.target.value })} /></label>
+              <label className="text-sm block">Mật khẩu<input required minLength={mode === 'register' ? 8 : 1} type="password" className={C.inp} value={form.password} onChange={event => setForm({ ...form, password: event.target.value })} /></label>
+              <Msg m={err} /><button className={C.btn + ' w-full'} disabled={busy}>{busy ? 'Đang xử lý...' : mode === 'register' ? 'Đăng ký khách hàng' : 'Đăng nhập'}</button>
+            </form>}
+            {user && user.role !== 'CUSTOMER' && <p className="text-sm text-amber-800">Đăng nhập tài khoản khách hàng để hoàn tất đơn trực tuyến.</p>}
+            <Msg m={user ? err : ''} /><Ok m={ok} />
+          </aside>
+        </div>
+      </main>
+      {selected && <div className="fixed inset-0 z-20 grid place-items-center bg-black/40 p-4" onClick={() => setSelected(null)}>
+        <div className="bg-white rounded-lg p-6 w-full max-w-lg space-y-3" onClick={event => event.stopPropagation()}>
+          <p className="text-sm text-stone-500">{selected.category?.name || 'Sản phẩm'}</p><h2 className="text-2xl font-semibold">{selected.name}</h2>
+          <p className="text-xl text-teal-800 font-semibold">{money(selected.price)}</p>
+          <p className="whitespace-pre-wrap">{selected.description || 'Sản phẩm hiện chưa có mô tả.'}</p>
+          <p className="text-sm">{selected.inStock ? 'Còn hàng' : 'Tạm hết hàng'}</p>
+          <div className="flex gap-2"><button className={C.btn} disabled={!selected.inStock} onClick={() => add(selected)}>Thêm vào giỏ</button><button className={C.btn2} onClick={() => setSelected(null)}>Đóng</button></div>
+        </div>
+      </div>}
     </div>
   );
+}
+
+function CustomerOrders() {
+  const [orders, reload, loadError] = useLoad('/customer/orders');
+  const [ok, setOk] = useState(''), [err, setErr] = useState('');
+  const cancel = async id => {
+    setOk(''); setErr('');
+    if (!confirm(`Hủy đơn hàng #${id}?`)) return;
+    try { await api(`/customer/orders/${id}/cancel`, { method: 'POST' }); setOk(`Đã hủy đơn hàng #${id}`); reload(); }
+    catch (error) { setErr(error.message); }
+  };
+  return <div className="space-y-3"><Msg m={loadError || err} /><Ok m={ok} />
+    {orders?.map(order => <article key={order.id} className={C.card}>
+      <div className="flex flex-wrap justify-between gap-2"><h2 className="font-semibold">Đơn hàng #{order.id}</h2><span>{orderStatus[order.status] || order.status}</span></div>
+      <p className="text-sm text-stone-500">{dt(order.createdAt)} · Thanh toán khi nhận hàng</p>
+      <p className="text-sm">Giao đến: {order.shippingAddress}</p>
+      <ul className="my-2 text-sm">{order.items.map(item => <li key={item.id}>{item.product.name} × {item.qty} — {money(item.price * item.qty)}</li>)}</ul>
+      <div className="flex justify-between font-semibold"><span>Tổng đơn</span><span>{money(order.total)}</span></div>
+      {order.status === 'PENDING' && <button className="mt-3 text-red-700" onClick={() => cancel(order.id)}>Hủy đơn</button>}
+    </article>)}
+    {!orders?.length && !loadError && <div className={C.card + ' text-stone-500'}>Bạn chưa có đơn hàng nào.</div>}
+  </div>;
 }
 
 // ---------- bán hàng (POS) ----------
@@ -124,11 +257,18 @@ function Invoice({ o, onClose }) {
   );
 }
 function Orders() {
-  const [d, , err] = useLoad('/orders');
+  const [d, reload, err] = useLoad('/orders'), [actionError, setActionError] = useState('');
+  const changeStatus = async (order, status) => {
+    setActionError('');
+    try { await api(`/orders/${order.id}/status`, { method: 'PUT', body: { status } }); reload(); }
+    catch (error) { setActionError(error.message); }
+  };
+  const nextStatus = { PENDING: ['CONFIRMED', 'CANCELLED'], CONFIRMED: ['SHIPPING', 'CANCELLED'], SHIPPING: ['PAID'] };
   return (
-    <div className={C.card + ' overflow-x-auto'}><Msg m={err} />
-      <table className="w-full text-sm"><thead><tr>{['Mã', 'Thời gian', 'Nhân viên', 'Khách', 'Sản phẩm', 'Tổng tiền'].map(h => <th key={h} className={C.th}>{h}</th>)}</tr></thead>
-        <tbody>{d?.map(o => <tr key={o.id}><td className={C.td}>#{o.id}</td><td className={C.td}>{dt(o.createdAt)}</td><td className={C.td}>{o.user.name}</td><td className={C.td}>{o.customer?.name || 'Khách lẻ'}</td><td className={C.td}>{o.items.map(i => `${i.product.name} ×${i.qty}`).join(', ')}</td><td className={C.td}>{money(o.total)}</td></tr>)}</tbody></table>
+    <div className={C.card + ' overflow-x-auto'}><Msg m={err || actionError} />
+      <table className="w-full text-sm"><thead><tr>{['Mã', 'Thời gian', 'Nhân viên', 'Khách', 'Sản phẩm / giao đến', 'Tổng tiền', 'Trạng thái', 'Cập nhật'].map(h => <th key={h} className={C.th}>{h}</th>)}</tr></thead>
+        <tbody>{d?.map(o => <tr key={o.id}><td className={C.td}>#{o.id}</td><td className={C.td}>{dt(o.createdAt)}</td><td className={C.td}>{o.user.name}</td><td className={C.td}>{o.customer?.name || 'Khách lẻ'}</td><td className={C.td}>{o.items.map(i => `${i.product.name} ×${i.qty}`).join(', ')}{o.shippingAddress && <div className="text-xs text-stone-500">{o.shippingAddress}</div>}</td><td className={C.td}>{money(o.total)}</td><td className={C.td}>{orderStatus[o.status] || o.status}</td>
+          <td className={C.td}>{nextStatus[o.status]?.length > 0 && <select aria-label={`Cập nhật đơn ${o.id}`} className="border rounded px-2 py-1" defaultValue="" onChange={event => { if (event.target.value) changeStatus(o, event.target.value); event.target.value = ''; }}><option value="">Chọn...</option>{nextStatus[o.status].map(status => <option key={status} value={status}>{orderStatus[status]}</option>)}</select>}</td></tr>)}</tbody></table>
     </div>
   );
 }
@@ -219,7 +359,7 @@ function Promotions() {
 
 // ---------- sản phẩm ----------
 function Products() {
-  const empty = { name: '', barcode: '', price: '', cost: 0, minStock: 5, categoryId: '' };
+  const empty = { name: '', description: '', barcode: '', price: '', cost: 0, minStock: 5, categoryId: '' };
   const [f, setF] = useState(empty), [err, setErr] = useState(''), [ok, setOk] = useState('');
   const [list, reload] = useLoad('/products'), [cats, reloadCats] = useLoad('/categories');
   const save = async e => {
@@ -239,6 +379,7 @@ function Products() {
       <form onSubmit={save} className={C.card + ' space-y-2 h-fit'}>
         <h2 className="font-semibold">{f.id ? 'Sửa sản phẩm' : 'Thêm sản phẩm'}</h2>
         {F('name', 'Tên sản phẩm')}{F('barcode', 'Mã vạch')}{F('price', 'Giá bán (₫)', 'number')}{F('minStock', 'Tồn tối thiểu để cảnh báo', 'number')}
+        <label className="text-sm block">Mô tả sản phẩm<textarea maxLength="2000" rows="3" className={C.inp} value={f.description || ''} onChange={e => setF({ ...f, description: e.target.value })} /></label>
         <label className="text-sm block">Danh mục<div className="flex gap-2"><select className={C.inp} value={f.categoryId} onChange={e => setF({ ...f, categoryId: e.target.value })}><option value="">Chưa phân loại</option>{cats?.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select><button type="button" className={C.btn2} onClick={addCat}>Thêm</button></div></label>
         <p className="text-xs text-stone-500">Tồn kho và giá vốn được cập nhật qua phiếu nhập kho.</p>
         <Msg m={err} /><Ok m={ok} />
@@ -251,13 +392,48 @@ function Products() {
 // ---------- kho ----------
 function Stock() {
   const [tab, setTab] = useState('stock');
-  const tabs = [['stock', 'Tồn kho & kiểm kê'], ['in', 'Nhập kho'], ['out', 'Xuất kho'], ['log', 'Sổ kho']];
+  const tabs = [['stock', 'Tồn kho & kiểm kê'], ['in', 'Nhập kho'], ['out', 'Xuất kho'], ['suppliers', 'Nhà cung cấp'], ['log', 'Sổ kho']];
   return (
     <div className="space-y-4">
       <div className="flex gap-2 flex-wrap">{tabs.map(([k, l]) => <button key={k} onClick={() => setTab(k)} className={tab === k ? C.btn : C.btn2}>{l}</button>)}</div>
-      {tab === 'stock' && <StockList />}{tab === 'in' && <ReceiptForm />}{tab === 'out' && <IssueForm />}{tab === 'log' && <Movements />}
+      {tab === 'stock' && <StockList />}{tab === 'in' && <ReceiptForm />}{tab === 'out' && <IssueForm />}{tab === 'suppliers' && <Suppliers />}{tab === 'log' && <Movements />}
     </div>
   );
+}
+function Suppliers() {
+  const empty = { name: '', phone: '', address: '' };
+  const [form, setForm] = useState(empty), [suppliers, reload, loadError] = useLoad('/suppliers');
+  const [err, setErr] = useState(''), [ok, setOk] = useState('');
+  const save = async event => {
+    event.preventDefault(); setErr(''); setOk('');
+    try {
+      await api(form.id ? `/suppliers/${form.id}` : '/suppliers', { method: form.id ? 'PUT' : 'POST', body: form });
+      setForm(empty); setOk('Đã lưu nhà cung cấp'); reload();
+    } catch (error) { setErr(error.message); }
+  };
+  const remove = async supplier => {
+    if (!confirm(`Xóa nhà cung cấp "${supplier.name}"?`)) return;
+    setErr(''); setOk('');
+    try { await api(`/suppliers/${supplier.id}`, { method: 'DELETE' }); setOk('Đã xóa nhà cung cấp'); reload(); }
+    catch (error) { setErr(error.message); }
+  };
+  return <div className="grid lg:grid-cols-[1fr_20rem] gap-4">
+    <div className={C.card + ' overflow-x-auto'}><Msg m={loadError} />
+      <table className="w-full text-sm"><thead><tr>{['Nhà cung cấp', 'Điện thoại', 'Địa chỉ', ''].map(label => <th key={label} className={C.th}>{label}</th>)}</tr></thead>
+        <tbody>{suppliers?.map(supplier => <tr key={supplier.id}><td className={C.td}>{supplier.name}</td><td className={C.td}>{supplier.phone || '—'}</td><td className={C.td}>{supplier.address || '—'}</td>
+          <td className={C.td + ' whitespace-nowrap'}><button className="text-teal-800 mr-3" onClick={() => setForm({ id: supplier.id, name: supplier.name, phone: supplier.phone || '', address: supplier.address || '' })}>Sửa</button><button className="text-red-700" onClick={() => remove(supplier)}>Xóa</button></td></tr>)}</tbody>
+      </table>
+      {!suppliers?.length && !loadError && <p className="text-sm text-stone-500">Chưa có nhà cung cấp.</p>}
+    </div>
+    <form onSubmit={save} className={C.card + ' space-y-2 h-fit'}>
+      <h2 className="font-semibold">{form.id ? 'Sửa nhà cung cấp' : 'Thêm nhà cung cấp'}</h2>
+      <label className="text-sm block">Tên nhà cung cấp<input required maxLength="120" className={C.inp} value={form.name} onChange={event => setForm({ ...form, name: event.target.value })} /></label>
+      <label className="text-sm block">Số điện thoại<input type="tel" maxLength="30" className={C.inp} value={form.phone} onChange={event => setForm({ ...form, phone: event.target.value })} /></label>
+      <label className="text-sm block">Địa chỉ<textarea maxLength="300" rows="3" className={C.inp} value={form.address} onChange={event => setForm({ ...form, address: event.target.value })} /></label>
+      <Msg m={err} /><Ok m={ok} />
+      <div className="flex gap-2"><button className={C.btn}>Lưu nhà cung cấp</button>{form.id && <button type="button" className={C.btn2} onClick={() => setForm(empty)}>Hủy sửa</button>}</div>
+    </form>
+  </div>;
 }
 function StockList() {
   const [d, reload] = useLoad('/stock'), [act, setAct] = useState({}), [msg, setMsg] = useState(''), [err, setErr] = useState('');
@@ -342,6 +518,7 @@ function Reports() {
   const [from, setFrom] = useState(iso(new Date(Date.now() - 29 * 864e5))), [to, setTo] = useState(iso(new Date()));
   const qs = `?from=${from}&to=${to}`;
   const [s, , e1] = useLoad('/reports/summary' + qs), [top, , e2] = useLoad('/reports/top-products' + qs);
+  const [insights, reloadInsights, insightError] = useLoad('/assistant/insights');
   const [days, setDays] = useState(7), [fc, setFc] = useState(null), [loading, setLoading] = useState(false), [err, setErr] = useState('');
   const runForecast = async () => { setLoading(true); setErr(''); try { setFc(await api('/forecast?days=' + days)); } catch (x) { setErr(x.message); } finally { setLoading(false); } };
   const exportXlsx = async () => {
@@ -360,6 +537,13 @@ function Reports() {
       </div>
       <Msg m={e1 || e2 || err} />
       {s && <div className="grid grid-cols-2 lg:grid-cols-5 gap-3"><Stat l="Doanh thu" v={money(s.revenue)} /><Stat l="Giá vốn hàng bán" v={money(s.cogs)} /><Stat l="Lợi nhuận" v={money(s.profit)} /><Stat l="Số đơn" v={s.orders} /><Stat l="Giá trị đơn trung bình" v={money(s.avg)} /></div>}
+      <section className={C.card + ' space-y-2'}>
+        <div className="flex flex-wrap items-center justify-between gap-2"><h2 className="font-semibold">Trợ lý AI nội bộ</h2><button className={C.btn2} onClick={reloadInsights}>Cập nhật phân tích</button></div>
+        <p className="text-xs text-stone-500">Phân tích tự động từ dữ liệu bán hàng và tồn kho của cửa hàng; không gửi dữ liệu ra dịch vụ bên ngoài.</p>
+        <Msg m={insightError} />
+        {insights?.messages.map((message, index) => <p key={index} className="text-sm">• {message}</p>)}
+        {insights && <p className="text-xs text-stone-500">Cơ sở: {insights.basis}</p>}
+      </section>
       <div className="grid lg:grid-cols-[2fr_1fr] gap-4">
         <div className={C.card}><h2 className="font-semibold mb-2">Doanh thu theo ngày</h2>
           {s?.daily.length ? <div className="h-64"><ResponsiveContainer><BarChart data={s.daily}><XAxis dataKey="date" tickFormatter={d => d.slice(5)} fontSize={12} /><YAxis tickFormatter={v => v / 1000 + 'k'} fontSize={12} width={48} /><Tooltip formatter={v => money(v)} /><Bar dataKey="revenue" fill="#0f766e" /></BarChart></ResponsiveContainer></div> : <p className="text-stone-500 text-sm">Chưa có đơn đã thanh toán trong khoảng thời gian này.</p>}</div>
@@ -380,23 +564,37 @@ function Reports() {
 }
 
 // ---------- khung ứng dụng ----------
-const NAV = [['pos', 'Bán hàng', ['SALES'], POS], ['orders', 'Lịch sử đơn', ['SALES'], Orders], ['customers', 'Khách hàng', ['SALES'], Customers], ['products', 'Sản phẩm', ['WAREHOUSE'], Products], ['stock', 'Kho', ['WAREHOUSE'], Stock], ['promotions', 'Khuyến mãi', [], Promotions], ['reports', 'Báo cáo và dự báo', [], Reports]];
+const NAV = [
+  ['store', 'Cửa hàng trực tuyến', ['OWNER', 'SALES', 'WAREHOUSE', 'CUSTOMER'], Storefront],
+  ['pos', 'Bán hàng tại quầy', ['SALES'], POS],
+  ['orders', 'Quản lý đơn hàng', ['SALES', 'WAREHOUSE'], Orders],
+  ['customers', 'Khách hàng', ['SALES'], Customers],
+  ['products', 'Sản phẩm', ['WAREHOUSE'], Products],
+  ['stock', 'Kho', ['WAREHOUSE'], Stock],
+  ['promotions', 'Khuyến mãi', ['OWNER'], Promotions],
+  ['reports', 'Báo cáo, AI và dự báo', ['OWNER'], Reports],
+  ['my-orders', 'Đơn hàng của tôi', ['CUSTOMER'], CustomerOrders],
+];
 export default function App() {
-  const [user, setUser] = useState(() => JSON.parse(localStorage.getItem('user') || 'null'));
+  const [user, setUser] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('user') || 'null'); } catch { return null; }
+  });
   const items = user ? NAV.filter(n => user.role === 'OWNER' || n[2].includes(user.role)) : [];
   const [page, setPage] = useState('');
-  if (!user) return <Login onLogin={u => { setUser(u); setPage(''); }} />;
-  const cur = items.find(n => n[0] === page) || items[0], Page = cur?.[3];
-  const roleName = { OWNER: 'Chủ cửa hàng', SALES: 'Nhân viên bán hàng', WAREHOUSE: 'Thủ kho' }[user.role];
+  if (!user) return <Storefront user={null} />;
+  const landing = { OWNER: 'reports', SALES: 'pos', WAREHOUSE: 'stock', CUSTOMER: 'store' }[user.role];
+  const cur = items.find(n => n[0] === page) || items.find(n => n[0] === landing) || items[0], Page = cur?.[3];
+  if (!cur) return <Storefront user={user} />;
+  const roleName = { OWNER: 'Quản trị viên', SALES: 'Nhân viên bán hàng', WAREHOUSE: 'Nhân viên kho', CUSTOMER: 'Khách hàng' }[user.role];
   return (
     <div className="min-h-screen md:flex">
       <nav className="bg-[#11263a] text-stone-100 md:w-56 md:min-h-screen p-4 flex md:block gap-2 flex-wrap items-center">
-        <div className="font-semibold text-lg md:mb-1">Cửa hàng nhỏ</div>
+        <div className="font-semibold text-lg md:mb-1">Quản lý bán hàng</div>
         <div className="text-xs text-stone-400 md:mb-5 mr-auto">{user.name} · {roleName}</div>
         {items.map(n => <button key={n[0]} onClick={() => setPage(n[0])} className={`block w-full text-left px-3 py-2 rounded md:mb-1 ${cur === n ? 'bg-teal-700' : 'hover:bg-white/10'}`} style={{ width: 'auto' }}>{n[1]}</button>)}
-        <button className="px-3 py-2 text-stone-400 hover:text-white md:mt-6" onClick={() => { localStorage.clear(); setUser(null); }}>Đăng xuất</button>
+        <button className="px-3 py-2 text-stone-400 hover:text-white md:mt-6" onClick={() => { localStorage.removeItem('token'); localStorage.removeItem('user'); setUser(null); }}>Đăng xuất</button>
       </nav>
-      <main className="flex-1 p-4 md:p-6 min-w-0"><h1 className="text-2xl font-semibold mb-4">{cur?.[1]}</h1>{Page && <Page key={cur[0]} />}</main>
+      <main className="flex-1 p-4 md:p-6 min-w-0"><h1 className="text-2xl font-semibold mb-4">{cur[1]}</h1>{Page && <Page key={cur[0]} user={user} />}</main>
     </div>
   );
 }

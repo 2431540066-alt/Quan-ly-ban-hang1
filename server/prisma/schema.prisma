@@ -8,12 +8,13 @@ datasource db {
 }
 
 model User {
-  id       Int     @id @default(autoincrement())
-  username String  @unique
+  id       Int       @id @default(autoincrement())
+  username String    @unique
   password String
   name     String
-  role     String // OWNER | SALES | WAREHOUSE
+  role     String // OWNER | SALES | WAREHOUSE | CUSTOMER
   orders   Order[]
+  customer Customer?
 }
 
 model Category {
@@ -23,15 +24,16 @@ model Category {
 }
 
 model Product {
-  id           Int            @id @default(autoincrement())
-  barcode      String?        @unique
+  id           Int             @id @default(autoincrement())
+  barcode      String?         @unique
   name         String
+  description  String?
   price        Int
-  cost         Float          @default(0)
-  stock        Int            @default(0)
-  minStock     Int            @default(5)
+  cost         Float           @default(0)
+  stock        Int             @default(0)
+  minStock     Int             @default(5)
   categoryId   Int?
-  category     Category?      @relation(fields: [categoryId], references: [id])
+  category     Category?       @relation(fields: [categoryId], references: [id])
   orderItems   OrderItem[]
   receiptItems ReceiptItem[]
   movements    StockMovement[]
@@ -41,6 +43,8 @@ model Customer {
   id     Int     @id @default(autoincrement())
   name   String
   phone  String?
+  userId Int?    @unique
+  user   User?   @relation(fields: [userId], references: [id])
   orders Order[]
 }
 
@@ -53,17 +57,18 @@ model Promotion {
 }
 
 model Order {
-  id         Int         @id @default(autoincrement())
-  userId     Int
-  customerId Int?
-  total      Int
-  discount   Int         @default(0)
-  payment    String
-  status     String      @default("PAID")
-  createdAt  DateTime    @default(now())
-  user       User        @relation(fields: [userId], references: [id])
-  customer   Customer?   @relation(fields: [customerId], references: [id])
-  items      OrderItem[]
+  id              Int         @id @default(autoincrement())
+  userId          Int
+  customerId      Int?
+  total           Int
+  discount        Int         @default(0)
+  payment         String
+  status          String      @default("PAID") // PENDING | CONFIRMED | SHIPPING | PAID | CANCELLED
+  shippingAddress String?
+  createdAt       DateTime    @default(now())
+  user            User        @relation(fields: [userId], references: [id])
+  customer        Customer?   @relation(fields: [customerId], references: [id])
+  items           OrderItem[]
 }
 
 model OrderItem {

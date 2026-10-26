@@ -1,12 +1,18 @@
 const express = require('express'), cors = require('cors'), jwt = require('jsonwebtoken'), bcrypt = require('bcryptjs'), ExcelJS = require('exceljs');
 const { PrismaClient } = require('@prisma/client');
 const { calcOrder, avgCost } = require('./calc');
+const { buildInsights } = require('./insights');
+const { canTransition } = require('./order-status');
 const db = new PrismaClient(), app = express();
 const SECRET = process.env.JWT_SECRET || 'dev-secret', FORECAST = process.env.FORECAST_URL || 'http://localhost:8000';
-app.use(cors(), express.json());
+app.use(cors(), express.json({ limit: '1mb' }));
 
 class Err extends Error { constructor(m, s = 400) { super(m); this.status = s; } }
 const ah = f => (req, res, next) => f(req, res).catch(next);
+app.get('/api/health', ah(async (_, res) => {
+  await db.$queryRaw`SELECT 1`;
+  res.json({ ok: true });
+}));
 // Phân quyền: chủ cửa hàng được vào mọi chức năng
 const auth = (...roles) => (req, res, next) => {
   try { req.user = jwt.verify((req.headers.authorization || '').slice(7), SECRET); }
@@ -18,30 +24,70 @@ const posInt = (v, msg) => { const n = Number(v); if (!Number.isInteger(n) || n 
 
 // ---- Đăng nhập
 app.post('/api/login', ah(async (req, res) => {
-  const u = await db.user.findUnique({ where: { username: String(req.body.username || '') } });
-  if (!u || !bcrypt.compareSync(String(req.body.password || ''), u.password)) throw new Err('Sai tên đăng nhập hoặc mật khẩu', 400);
+  const body = req.body || {};
+  const username = String(body.username || '').trim();
+  const u = await db.user.findUnique({ where: { username } });
+  if (!u || !bcrypt.compareSync(String(body.password || ''), u.password)) throw new Err('Sai tên đăng nhập hoặc mật khẩu', 400);
   const user = { id: u.id, name: u.name, role: u.role };
   res.json({ token: jwt.sign(user, SECRET, { expiresIn: '12h' }), user });
 }));
+app.post('/api/register', ah(async (req, res) => {
+  const body = req.body || {};
+  const username = String(body.username || '').trim().toLowerCase();
+  const name = String(body.name || '').trim();
+  const phone = String(body.phone || '').trim();
+  const password = String(body.password || '');
+  if (!/^[a-z0-9_-]{3,32}$/.test(username)) throw new Err('Tên đăng nhập phải có 3-32 ký tự: chữ thường, số, gạch ngang hoặc gạch dưới');
+  if (!name || name.length > 120) throw new Err('Họ tên không hợp lệ');
+  if (phone.length > 30) throw new Err('Số điện thoại quá dài');
+  if (password.length < 8 || password.length > 72) throw new Err('Mật khẩu phải có từ 8 đến 72 ký tự');
+  const user = await db.$transaction(async tx => {
+    const created = await tx.user.create({ data: { username, password: bcrypt.hashSync(password, 10), name, role: 'CUSTOMER' } });
+    await tx.customer.create({ data: { name, phone: phone || null, userId: created.id } });
+    return { id: created.id, name: created.name, role: created.role };
+  });
+  res.status(201).json({ token: jwt.sign(user, SECRET, { expiresIn: '12h' }), user });
+}));
 
 // ---- Danh mục & sản phẩm
-app.get('/api/categories', auth(), ah(async (_, res) => res.json(await db.category.findMany({ orderBy: { name: 'asc' } }))));
+app.get('/api/store/categories', ah(async (_, res) => res.json(await db.category.findMany({ orderBy: { name: 'asc' } }))));
+app.get('/api/store/products', ah(async (req, res) => {
+  const q = String(req.query.q || '').trim();
+  const categoryId = req.query.categoryId ? posInt(req.query.categoryId, 'Danh mục không hợp lệ') : undefined;
+  const where = {
+    ...(q ? { OR: [{ name: { contains: q, mode: 'insensitive' } }, { barcode: { contains: q } }] } : {}),
+    ...(categoryId ? { categoryId } : {}),
+  };
+  const products = await db.product.findMany({
+    where, include: { category: true }, orderBy: { name: 'asc' }, take: 100,
+  });
+  res.json(products.map(({ id, name, description, price, stock, barcode, category }) => ({
+    id, name, description, price, inStock: stock > 0, barcode, category,
+  })));
+}));
+app.get('/api/categories', auth('SALES', 'WAREHOUSE'), ah(async (_, res) => res.json(await db.category.findMany({ orderBy: { name: 'asc' } }))));
 app.post('/api/categories', auth('WAREHOUSE'), ah(async (req, res) => {
-  if (!String(req.body.name || '').trim()) throw new Err('Thiếu tên danh mục');
-  res.json(await db.category.create({ data: { name: req.body.name.trim() } }));
+  const name = String((req.body || {}).name || '').trim();
+  if (!name) throw new Err('Thiếu tên danh mục');
+  if (name.length > 100) throw new Err('Tên danh mục quá dài');
+  res.json(await db.category.create({ data: { name } }));
 }));
 const prodData = b => {
+  b = b || {};
+  if (b.price == null || b.price === '') throw new Err('Thiếu giá bán');
   const price = Number(b.price), cost = Number(b.cost ?? 0), minStock = Number(b.minStock ?? 5);
   const categoryId = b.categoryId ? Number(b.categoryId) : null;
-  const d = { name: String(b.name || '').trim(), barcode: b.barcode ? String(b.barcode).trim() : null, price: Math.round(price), cost, minStock: Math.round(minStock), categoryId };
+  const description = String(b.description || '').trim();
+  const d = { name: String(b.name || '').trim(), description: description || null, barcode: b.barcode ? String(b.barcode).trim() : null, price: Math.round(price), cost, minStock: Math.round(minStock), categoryId };
   if (!d.name) throw new Err('Thiếu tên sản phẩm');
+  if (d.name.length > 160 || description.length > 2000) throw new Err('Tên hoặc mô tả sản phẩm quá dài');
   if (!Number.isInteger(price) || price < 0 || price > 2147483647) throw new Err('Giá bán phải là số nguyên không âm hợp lệ');
   if (!Number.isFinite(cost) || cost < 0) throw new Err('Giá vốn không hợp lệ');
   if (!Number.isInteger(minStock) || minStock < 0 || minStock > 2147483647) throw new Err('Tồn kho tối thiểu phải là số nguyên không âm hợp lệ');
   if (categoryId !== null && (!Number.isInteger(categoryId) || categoryId <= 0)) throw new Err('Danh mục không hợp lệ');
   return d;
 };
-app.get('/api/products', auth(), ah(async (req, res) => {
+app.get('/api/products', auth('SALES', 'WAREHOUSE'), ah(async (req, res) => {
   const { q, barcode } = req.query;
   const where = barcode ? { barcode: String(barcode) } : q ? { OR: [{ name: { contains: String(q), mode: 'insensitive' } }, { barcode: { contains: String(q) } }] } : {};
   res.json(await db.product.findMany({ where, include: { category: true }, orderBy: { name: 'asc' }, take: 200 }));
@@ -68,13 +114,15 @@ app.delete('/api/products/:id', auth('WAREHOUSE'), ah(async (req, res) => {
 // ---- Khách hàng, khuyến mãi
 app.get('/api/customers', auth('SALES'), ah(async (_, res) => res.json(await db.customer.findMany({ orderBy: { name: 'asc' }, include: { _count: { select: { orders: true } } } }))));
 app.post('/api/customers', auth('SALES'), ah(async (req, res) => {
-  const name = String(req.body.name || '').trim(), phone = String(req.body.phone || '').trim();
+  const body = req.body || {};
+  const name = String(body.name || '').trim(), phone = String(body.phone || '').trim();
   if (!name) throw new Err('Thiếu tên khách hàng');
   if (name.length > 120 || phone.length > 30) throw new Err('Tên khách hàng hoặc số điện thoại quá dài');
   res.json(await db.customer.create({ data: { name, phone: phone || null } }));
 }));
 app.put('/api/customers/:id', auth('SALES'), ah(async (req, res) => {
-  const name = String(req.body.name || '').trim(), phone = String(req.body.phone || '').trim();
+  const body = req.body || {};
+  const name = String(body.name || '').trim(), phone = String(body.phone || '').trim();
   if (!name) throw new Err('Thiếu tên khách hàng');
   if (name.length > 120 || phone.length > 30) throw new Err('Tên khách hàng hoặc số điện thoại quá dài');
   res.json(await db.customer.update({ where: { id: posInt(req.params.id, 'Khách hàng không hợp lệ') }, data: { name, phone: phone || null } }));
@@ -87,6 +135,7 @@ app.delete('/api/customers/:id', auth('SALES'), ah(async (req, res) => {
 }));
 app.get('/api/promotions', auth('OWNER'), ah(async (_, res) => res.json(await db.promotion.findMany({ orderBy: { code: 'asc' } }))));
 const promoData = body => {
+  body = body || {};
   const code = String(body.code || '').trim().toUpperCase();
   const type = String(body.type || '');
   const value = Number(body.value);
@@ -112,53 +161,140 @@ async function findPromo(code, client = db) {
   if (p.expiresAt && p.expiresAt < new Date()) throw new Err('Mã khuyến mãi đã hết hạn');
   return p;
 }
-app.post('/api/promotions/validate', auth('SALES'), ah(async (req, res) => res.json(await findPromo(req.body.code))));
+app.post('/api/promotions/validate', auth('SALES', 'CUSTOMER'), ah(async (req, res) => res.json(await findPromo((req.body || {}).code))));
 
 // ---- Bán hàng: lưu đơn trong một transaction
-app.post('/api/orders', auth('SALES'), ah(async (req, res) => {
-  const { items = [], code, customerId, payment = 'CASH' } = req.body;
+async function createOrder(tx, { userId, items, code, customerId, payment, status = 'PAID', shippingAddress = null }) {
   if (!Array.isArray(items) || !items.length) throw new Err('Giỏ hàng trống');
   if (items.length > 100) throw new Err('Đơn hàng không được vượt quá 100 dòng sản phẩm');
-  if (!['CASH', 'TRANSFER'].includes(payment)) throw new Err('Hình thức thanh toán không hợp lệ');
+  if (items.some(item => !item || typeof item !== 'object')) throw new Err('Dòng sản phẩm trong đơn hàng không hợp lệ');
+  if (!['CASH', 'TRANSFER', 'COD'].includes(payment)) throw new Err('Hình thức thanh toán không hợp lệ');
   if (customerId) posInt(customerId, 'Khách hàng không hợp lệ');
-  const order = await db.$transaction(async tx => {
-    const quantities = new Map();
-    for (const it of items) {
-      const qty = posInt(it.qty, 'Số lượng không hợp lệ');
-      const id = posInt(it.productId, 'Sản phẩm không hợp lệ');
-      quantities.set(id, (quantities.get(id) || 0) + qty);
-    }
-    if ([...quantities.values()].some(qty => qty > 2147483647)) throw new Err('Số lượng sản phẩm vượt giới hạn');
-    if (customerId && !await tx.customer.findUnique({ where: { id: Number(customerId) } })) throw new Err('Khách hàng không tồn tại');
-    const lines = [];
-    for (const [id, qty] of quantities) {
-      const p = await tx.product.findUnique({ where: { id } });
-      if (!p) throw new Err('Sản phẩm không tồn tại');
-      lines.push({ productId: p.id, qty, price: p.price, cost: p.cost, name: p.name });
-    }
-    const t = calcOrder(lines, code ? await findPromo(code, tx) : null);
-    if (!Number.isSafeInteger(t.total) || !Number.isSafeInteger(t.discount) || t.total > 2147483647 || t.discount > 2147483647) throw new Err('Tổng tiền đơn hàng vượt giới hạn cho phép');
-    const o = await tx.order.create({
-      data: { userId: req.user.id, customerId: customerId ? Number(customerId) : null, payment, discount: t.discount, total: t.total, items: { create: lines.map(({ name, ...l }) => l) } },
-      include: { items: { include: { product: true } }, customer: true, user: true },
-    });
-    for (const l of lines) { // trừ kho có điều kiện: tồn không bao giờ âm
-      const r = await tx.product.updateMany({ where: { id: l.productId, stock: { gte: l.qty } }, data: { stock: { decrement: l.qty } } });
-      if (!r.count) throw new Err(`"${l.name}" không đủ tồn kho`);
-      await tx.stockMovement.create({ data: { productId: l.productId, type: 'OUT', qty: -l.qty, ref: 'HD' + o.id } });
-    }
-    return o;
+  const quantities = new Map();
+  for (const it of items) {
+    const qty = posInt(it.qty, 'Số lượng không hợp lệ');
+    const id = posInt(it.productId, 'Sản phẩm không hợp lệ');
+    quantities.set(id, (quantities.get(id) || 0) + qty);
+  }
+  if ([...quantities.values()].some(qty => qty > 2147483647)) throw new Err('Số lượng sản phẩm vượt giới hạn');
+  if (customerId && !await tx.customer.findUnique({ where: { id: Number(customerId) } })) throw new Err('Khách hàng không tồn tại');
+  const lines = [];
+  for (const [id, qty] of quantities) {
+    const p = await tx.product.findUnique({ where: { id } });
+    if (!p) throw new Err('Sản phẩm không tồn tại');
+    lines.push({ productId: p.id, qty, price: p.price, cost: p.cost, name: p.name });
+  }
+  const t = calcOrder(lines, code ? await findPromo(code, tx) : null);
+  if (!Number.isSafeInteger(t.total) || !Number.isSafeInteger(t.discount) || t.total > 2147483647 || t.discount > 2147483647) throw new Err('Tổng tiền đơn hàng vượt giới hạn cho phép');
+  const order = await tx.order.create({
+    data: {
+      userId, customerId: customerId ? Number(customerId) : null, payment, status,
+      shippingAddress, discount: t.discount, total: t.total,
+      items: { create: lines.map(({ name, ...line }) => line) },
+    },
+    include: { items: { include: { product: true } }, customer: true, user: true },
   });
-  res.json(order);
+  for (const line of lines) {
+    const updated = await tx.product.updateMany({
+      where: { id: line.productId, stock: { gte: line.qty } },
+      data: { stock: { decrement: line.qty } },
+    });
+    if (!updated.count) throw new Err(`"${line.name}" không đủ tồn kho`);
+    await tx.stockMovement.create({ data: { productId: line.productId, type: 'OUT', qty: -line.qty, ref: 'HD' + order.id } });
+  }
+  return order;
+}
+app.post('/api/orders', auth('SALES'), ah(async (req, res) => {
+  const { items = [], code, customerId, payment = 'CASH' } = req.body || {};
+  res.json(await db.$transaction(tx => createOrder(tx, {
+    userId: req.user.id, items, code, customerId, payment,
+  })));
 }));
-app.get('/api/orders', auth('SALES'), ah(async (_, res) => res.json(await db.order.findMany({ orderBy: { id: 'desc' }, take: 50, include: { customer: true, user: true, items: { include: { product: true } } } }))));
+app.get('/api/orders', auth('SALES', 'WAREHOUSE'), ah(async (_, res) => res.json(await db.order.findMany({ orderBy: { id: 'desc' }, take: 100, include: { customer: true, user: true, items: { include: { product: true } } } }))));
+app.put('/api/orders/:id/status', auth('SALES', 'WAREHOUSE'), ah(async (req, res) => {
+  const id = posInt(req.params.id, 'Đơn hàng không hợp lệ');
+  const next = String((req.body || {}).status || '');
+  const status = await db.$transaction(async tx => {
+    const order = await tx.order.findUnique({ where: { id }, include: { items: true } });
+    if (!order) throw new Err('Không tìm thấy đơn hàng', 404);
+    if (!canTransition(order.status, next)) throw new Err('Không thể chuyển đơn hàng sang trạng thái này');
+    const changed = await tx.order.updateMany({ where: { id, status: order.status }, data: { status: next } });
+    if (!changed.count) throw new Err('Đơn hàng đã được cập nhật ở một phiên khác', 409);
+    if (next === 'CANCELLED') {
+      for (const item of order.items) {
+        await tx.product.update({ where: { id: item.productId }, data: { stock: { increment: item.qty } } });
+        await tx.stockMovement.create({ data: { productId: item.productId, type: 'IN', qty: item.qty, ref: `HD${id}-HUY` } });
+      }
+    }
+    return next;
+  });
+  res.json(await db.order.findUnique({ where: { id }, include: { customer: true, user: true, items: { include: { product: true } } } }));
+}));
+
+// ---- Cửa hàng trực tuyến cho khách hàng
+app.get('/api/customer/orders', auth('CUSTOMER'), ah(async (req, res) => {
+  const customer = await db.customer.findUnique({ where: { userId: req.user.id } });
+  if (!customer) throw new Err('Không tìm thấy hồ sơ khách hàng', 404);
+  res.json(await db.order.findMany({
+    where: { customerId: customer.id }, orderBy: { createdAt: 'desc' }, take: 100,
+    include: { items: { include: { product: true } } },
+  }));
+}));
+app.post('/api/customer/orders', auth('CUSTOMER'), ah(async (req, res) => {
+  const body = req.body || {};
+  const address = String(body.address || '').trim();
+  if (address.length < 8 || address.length > 500) throw new Err('Địa chỉ giao hàng phải có từ 8 đến 500 ký tự');
+  const customer = await db.customer.findUnique({ where: { userId: req.user.id } });
+  if (!customer) throw new Err('Không tìm thấy hồ sơ khách hàng', 404);
+  const order = await db.$transaction(tx => createOrder(tx, {
+    userId: req.user.id, customerId: customer.id, items: body.items,
+    payment: 'COD', status: 'PENDING', shippingAddress: address,
+  }));
+  res.status(201).json(order);
+}));
+app.post('/api/customer/orders/:id/cancel', auth('CUSTOMER'), ah(async (req, res) => {
+  const id = posInt(req.params.id, 'Đơn hàng không hợp lệ');
+  const customer = await db.customer.findUnique({ where: { userId: req.user.id } });
+  if (!customer) throw new Err('Không tìm thấy hồ sơ khách hàng', 404);
+  await db.$transaction(async tx => {
+    const order = await tx.order.findFirst({ where: { id, customerId: customer.id }, include: { items: true } });
+    if (!order) throw new Err('Không tìm thấy đơn hàng', 404);
+    if (order.status !== 'PENDING') throw new Err('Chỉ có thể hủy đơn đang chờ xác nhận');
+    const changed = await tx.order.updateMany({ where: { id, customerId: customer.id, status: 'PENDING' }, data: { status: 'CANCELLED' } });
+    if (!changed.count) throw new Err('Đơn hàng đã được cập nhật ở một phiên khác', 409);
+    for (const item of order.items) {
+      await tx.product.update({ where: { id: item.productId }, data: { stock: { increment: item.qty } } });
+      await tx.stockMovement.create({ data: { productId: item.productId, type: 'IN', qty: item.qty, ref: `HD${id}-HUY` } });
+    }
+  });
+  res.json({ ok: true });
+}));
 
 // ---- Kho
 const WH = auth('WAREHOUSE');
 app.get('/api/suppliers', WH, ah(async (_, res) => res.json(await db.supplier.findMany())));
 app.post('/api/suppliers', WH, ah(async (req, res) => {
-  if (!String(req.body.name || '').trim()) throw new Err('Thiếu tên nhà cung cấp');
-  res.json(await db.supplier.create({ data: { name: req.body.name.trim(), phone: req.body.phone || null } }));
+  const body = req.body || {}, name = String(body.name || '').trim();
+  const phone = String(body.phone || '').trim(), address = String(body.address || '').trim();
+  if (!name) throw new Err('Thiếu tên nhà cung cấp');
+  if (name.length > 120 || phone.length > 30 || address.length > 300) throw new Err('Thông tin nhà cung cấp quá dài');
+  res.json(await db.supplier.create({ data: { name, phone: phone || null, address: address || null } }));
+}));
+app.put('/api/suppliers/:id', WH, ah(async (req, res) => {
+  const body = req.body || {}, name = String(body.name || '').trim();
+  const phone = String(body.phone || '').trim(), address = String(body.address || '').trim();
+  if (!name) throw new Err('Thiếu tên nhà cung cấp');
+  if (name.length > 120 || phone.length > 30 || address.length > 300) throw new Err('Thông tin nhà cung cấp quá dài');
+  res.json(await db.supplier.update({
+    where: { id: posInt(req.params.id, 'Nhà cung cấp không hợp lệ') },
+    data: { name, phone: phone || null, address: address || null },
+  }));
+}));
+app.delete('/api/suppliers/:id', WH, ah(async (req, res) => {
+  const id = posInt(req.params.id, 'Nhà cung cấp không hợp lệ');
+  if (await db.receipt.count({ where: { supplierId: id } })) throw new Err('Nhà cung cấp đã có phiếu nhập, không thể xóa');
+  await db.supplier.delete({ where: { id } });
+  res.json({ ok: true });
 }));
 async function confirmReceipt(tx, id) {
   const r = await tx.receipt.findUnique({ where: { id }, include: { items: true } });
@@ -172,11 +308,12 @@ async function confirmReceipt(tx, id) {
   return tx.receipt.update({ where: { id }, data: { status: 'CONFIRMED' } });
 }
 app.post('/api/receipts', WH, ah(async (req, res) => {
-  const { supplierId, note, items = [], confirm } = req.body;
+  const { supplierId, note, items = [], confirm } = req.body || {};
   if (!Array.isArray(items) || !items.length) throw new Err('Phiếu chưa có sản phẩm');
   if (items.length > 100) throw new Err('Phiếu nhập không được vượt quá 100 dòng sản phẩm');
   if (supplierId) posInt(supplierId, 'Nhà cung cấp không hợp lệ');
   const lines = items.map((it, i) => {
+    if (!it || typeof it !== 'object') throw new Err(`Dòng ${i + 1}: sản phẩm không hợp lệ`);
     const cost = Number(it.cost);
     if (it.cost === '' || it.cost == null || !Number.isInteger(cost) || cost < 0 || cost > 2147483647) throw new Err(`Dòng ${i + 1}: giá nhập phải là số nguyên không âm hợp lệ`);
     return { productId: posInt(it.productId, `Dòng ${i + 1}: sản phẩm không hợp lệ`), qty: posInt(it.qty, `Dòng ${i + 1}: số lượng phải là số nguyên dương`), cost };
@@ -195,22 +332,28 @@ app.post('/api/receipts', WH, ah(async (req, res) => {
 app.post('/api/receipts/:id/confirm', WH, ah(async (req, res) => res.json(await db.$transaction(tx => confirmReceipt(tx, +req.params.id)))));
 app.get('/api/receipts', WH, ah(async (_, res) => res.json(await db.receipt.findMany({ orderBy: { id: 'desc' }, take: 30, include: { supplier: true, items: { include: { product: true } } } }))));
 app.post('/api/issues', WH, ah(async (req, res) => {
-  const qty = posInt(req.body.qty, 'Số lượng phải là số nguyên dương'), id = posInt(req.body.productId, 'Sản phẩm không hợp lệ');
+  const body = req.body || {};
+  const qty = posInt(body.qty, 'Số lượng phải là số nguyên dương'), id = posInt(body.productId, 'Sản phẩm không hợp lệ');
   await db.$transaction(async tx => {
     const r = await tx.product.updateMany({ where: { id, stock: { gte: qty } }, data: { stock: { decrement: qty } } });
     if (!r.count) throw new Err('Không đủ tồn kho để xuất');
-    await tx.stockMovement.create({ data: { productId: id, type: 'OUT', qty: -qty, ref: 'PX: ' + (req.body.note || 'xuất kho') } });
+    await tx.stockMovement.create({ data: { productId: id, type: 'OUT', qty: -qty, ref: 'PX: ' + (body.note || 'xuất kho') } });
   });
   res.json({ ok: true });
 }));
 app.post('/api/stocktakes', WH, ah(async (req, res) => {
   const ref = 'KK' + Date.now(); let changed = 0;
-  if (!Array.isArray(req.body.items)) throw new Err('Danh sách kiểm kê không hợp lệ');
+  const body = req.body || {};
+  if (!Array.isArray(body.items)) throw new Err('Danh sách kiểm kê không hợp lệ');
   await db.$transaction(async tx => {
-    const items = req.body.items.map(it => ({
-      productId: posInt(it.productId, 'Sản phẩm kiểm kê không hợp lệ'),
-      actual: Number(it.actual),
-    }));
+    const items = body.items.map(it => {
+      if (!it || typeof it !== 'object') throw new Err('Dòng kiểm kê không hợp lệ');
+      if (it.actual == null || it.actual === '') throw new Err('Số thực tế không hợp lệ');
+      return {
+        productId: posInt(it.productId, 'Sản phẩm kiểm kê không hợp lệ'),
+        actual: Number(it.actual),
+      };
+    });
     if (items.some(it => !Number.isInteger(it.actual) || it.actual < 0 || it.actual > 2147483647)) throw new Err('Số thực tế không hợp lệ');
     const ids = [...new Set(items.map(it => it.productId))];
     if (await tx.product.count({ where: { id: { in: ids } } }) !== ids.length) throw new Err('Sản phẩm kiểm kê không tồn tại');
@@ -258,6 +401,17 @@ app.get('/api/reports/top-products', OWN, ah(async (req, res) => {
   }
   res.json(Object.values(m).sort((a, b) => b.qty - a.qty).slice(0, 10));
 }));
+app.get('/api/assistant/insights', OWN, ah(async (_, res) => {
+  const since = new Date(Date.now() - 30 * 864e5);
+  const [orders, products] = await Promise.all([
+    db.order.findMany({
+      where: { status: 'PAID', createdAt: { gte: since } },
+      select: { total: true, items: { select: { productId: true, qty: true, product: { select: { name: true } } } } },
+    }),
+    db.product.findMany({ select: { id: true, name: true, stock: true, minStock: true } }),
+  ]);
+  res.json(buildInsights(orders, products));
+}));
 app.get('/api/reports/export', OWN, ah(async (req, res) => {
   if ((req.query.format || 'xlsx') !== 'xlsx') throw new Err('Hiện chỉ hỗ trợ xuất Excel (xlsx)');
   const s = await summary(req.query), wb = new ExcelJS.Workbook(), ws = wb.addWorksheet('Tổng quan');
@@ -294,7 +448,7 @@ app.get('/api/forecast', OWN, ah(async (req, res) => {
 }));
 
 app.use((e, req, res, next) => {
-  if (e.code === 'P2002') return res.status(400).json({ error: 'Dữ liệu bị trùng (tên, mã vạch hoặc mã khuyến mãi đã tồn tại)' });
+  if (e.code === 'P2002') return res.status(400).json({ error: 'Dữ liệu bị trùng (tên đăng nhập, tên, số điện thoại, mã vạch hoặc mã khuyến mãi)' });
   if (e.code === 'P2003') return res.status(400).json({ error: 'Không thể xóa hoặc thay đổi dữ liệu đang được sử dụng' });
   if (e.code === 'P2025') return res.status(404).json({ error: 'Không tìm thấy dữ liệu yêu cầu' });
   if (e.status || e.message.includes('khuyến mãi')) return res.status(e.status || 400).json({ error: e.message });

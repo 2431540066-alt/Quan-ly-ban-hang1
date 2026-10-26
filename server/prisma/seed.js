@@ -2,11 +2,21 @@ const { PrismaClient } = require('@prisma/client'), bcrypt = require('bcryptjs')
 const db = new PrismaClient();
 const rnd = (a, b) => a + Math.random() * (b - a);
 (async () => {
-  if (await db.user.count()) return console.log('Đã có dữ liệu, bỏ qua seed');
   const pw = bcrypt.hashSync('123456', 10);
+  if (await db.user.count()) {
+    await db.$transaction(async tx => {
+      let customer = await tx.user.findUnique({ where: { username: 'customer' } });
+      if (!customer) customer = await tx.user.create({ data: { username: 'customer', password: pw, name: 'Khách hàng mẫu', role: 'CUSTOMER' } });
+      if (customer.role === 'CUSTOMER' && !await tx.customer.findUnique({ where: { userId: customer.id } })) {
+        await tx.customer.create({ data: { name: customer.name, phone: '0911111111', userId: customer.id } });
+      }
+    });
+    return console.log('Đã có dữ liệu, giữ nguyên dữ liệu hiện có');
+  }
   await db.user.create({ data: { username: 'owner', password: pw, name: 'Chủ cửa hàng', role: 'OWNER' } });
   const sales = await db.user.create({ data: { username: 'sales', password: pw, name: 'Nhân viên bán hàng', role: 'SALES' } });
   await db.user.create({ data: { username: 'stock', password: pw, name: 'Thủ kho', role: 'WAREHOUSE' } });
+  const customer = await db.user.create({ data: { username: 'customer', password: pw, name: 'Khách hàng mẫu', role: 'CUSTOMER' } });
   const cats = {};
   for (const n of ['Đồ uống', 'Đồ ăn vặt', 'Gia dụng']) cats[n] = (await db.category.create({ data: { name: n } })).id;
   const list = [ // tên, danh mục, giá bán, giá vốn, độ phổ biến
@@ -22,7 +32,7 @@ const rnd = (a, b) => a + Math.random() * (b - a);
     { code: 'GIAM10', type: 'PERCENT', value: 10 }, { code: 'GIAM20K', type: 'AMOUNT', value: 20000 },
     { code: 'HETHAN', type: 'PERCENT', value: 15, expiresAt: new Date('2025-01-01') } ] });
   await db.supplier.create({ data: { name: 'Công ty Phân phối An Phát', phone: '0900000000' } });
-  await db.customer.create({ data: { name: 'Khách quen', phone: '0911111111' } });
+  await db.customer.create({ data: { name: 'Khách hàng mẫu', phone: '0911111111', userId: customer.id } });
   // Dữ liệu bán hàng GIẢ LẬP 120 ngày: cuối tuần bán nhiều hơn, xu hướng tăng nhẹ, có nhiễu
   for (let d = 120; d >= 1; d--) {
     const date = new Date(Date.now() - d * 864e5); date.setHours(10, 0, 0, 0);
