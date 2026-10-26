@@ -3,11 +3,15 @@
 Bán hàng (POS) · Quản lý kho · Báo cáo & dự báo nhập hàng.
 React + Vite + Tailwind · Node/Express + JWT · PostgreSQL + Prisma · FastAPI + statsmodels.
 
+Chức năng gồm bán hàng và in hóa đơn, lịch sử đơn, quản lý khách hàng, sản phẩm và danh mục, nhập/xuất kho và kiểm kê, quản lý mã khuyến mãi, báo cáo doanh thu/lợi nhuận, xuất Excel và dự báo nhập hàng. Chủ cửa hàng có toàn quyền; nhân viên bán hàng thao tác POS và khách hàng; thủ kho quản lý sản phẩm và tồn kho.
+
 ## Chạy bằng Docker (khuyên dùng)
 ```bash
 docker compose up --build
 ```
 Mở http://localhost:5173. Lần đầu hệ thống tự tạo bảng và sinh dữ liệu mẫu (120 ngày bán hàng).
+
+Dữ liệu ứng dụng được lưu trong PostgreSQL, giữ lại qua lần dừng/chạy lại nhờ Docker volume `pgdata`. Không xóa volume nếu muốn giữ dữ liệu (`docker compose down -v` sẽ xóa dữ liệu cơ sở dữ liệu).
 
 | Vai trò | Tài khoản | Mật khẩu |
 |---|---|---|

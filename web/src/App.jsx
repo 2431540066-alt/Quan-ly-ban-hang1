@@ -133,6 +133,90 @@ function Orders() {
   );
 }
 
+function Customers() {
+  const empty = { name: '', phone: '' };
+  const [form, setForm] = useState(empty), [customers, reload, loadError] = useLoad('/customers');
+  const [query, setQuery] = useState(''), [err, setErr] = useState(''), [ok, setOk] = useState('');
+  const save = async e => {
+    e.preventDefault(); setErr(''); setOk('');
+    try {
+      await api(form.id ? `/customers/${form.id}` : '/customers', { method: form.id ? 'PUT' : 'POST', body: form });
+      setForm(empty); setOk('Đã lưu khách hàng'); reload();
+    } catch (x) { setErr(x.message); }
+  };
+  const remove = async customer => {
+    if (!confirm(`Xóa khách hàng "${customer.name}"?`)) return;
+    setErr(''); setOk('');
+    try { await api(`/customers/${customer.id}`, { method: 'DELETE' }); setOk('Đã xóa khách hàng'); reload(); }
+    catch (x) { setErr(x.message); }
+  };
+  const filtered = customers?.filter(c => `${c.name} ${c.phone || ''}`.toLowerCase().includes(query.toLowerCase())) || [];
+  return (
+    <div className="grid lg:grid-cols-[1fr_20rem] gap-4">
+      <div className={C.card + ' overflow-x-auto space-y-3'}>
+        <Msg m={loadError} />
+        <input className={C.inp} placeholder="Tìm theo tên hoặc số điện thoại" value={query} onChange={e => setQuery(e.target.value)} />
+        <table className="w-full text-sm"><thead><tr>{['Tên khách hàng', 'Số điện thoại', 'Số đơn', ''].map(h => <th key={h} className={C.th}>{h}</th>)}</tr></thead>
+          <tbody>{filtered.map(c => <tr key={c.id}><td className={C.td}>{c.name}</td><td className={C.td}>{c.phone || '—'}</td><td className={C.td}>{c._count?.orders ?? '—'}</td>
+            <td className={C.td + ' whitespace-nowrap'}><button className="text-teal-800 mr-3" onClick={() => setForm({ id: c.id, name: c.name, phone: c.phone || '' })}>Sửa</button><button className="text-red-700" onClick={() => remove(c)}>Xóa</button></td></tr>)}</tbody>
+        </table>
+        {!filtered.length && <p className="text-sm text-stone-500">Chưa có khách hàng phù hợp.</p>}
+      </div>
+      <form onSubmit={save} className={C.card + ' space-y-2 h-fit'}>
+        <h2 className="font-semibold">{form.id ? 'Sửa khách hàng' : 'Thêm khách hàng'}</h2>
+        <label className="text-sm block">Tên khách hàng<input required maxLength="120" className={C.inp} value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} /></label>
+        <label className="text-sm block">Số điện thoại<input type="tel" maxLength="30" className={C.inp} value={form.phone} onChange={e => setForm({ ...form, phone: e.target.value })} /></label>
+        <Msg m={err} /><Ok m={ok} />
+        <div className="flex gap-2"><button className={C.btn}>Lưu khách hàng</button>{form.id && <button type="button" className={C.btn2} onClick={() => setForm(empty)}>Hủy sửa</button>}</div>
+      </form>
+    </div>
+  );
+}
+
+function Promotions() {
+  const empty = { code: '', type: 'PERCENT', value: '', expiresAt: '' };
+  const [form, setForm] = useState(empty), [promotions, reload, loadError] = useLoad('/promotions');
+  const [err, setErr] = useState(''), [ok, setOk] = useState('');
+  const save = async e => {
+    e.preventDefault(); setErr(''); setOk('');
+    try {
+      await api(form.id ? `/promotions/${form.id}` : '/promotions', { method: form.id ? 'PUT' : 'POST', body: form });
+      setForm(empty); setOk('Đã lưu mã khuyến mãi'); reload();
+    } catch (x) { setErr(x.message); }
+  };
+  const remove = async promotion => {
+    if (!confirm(`Xóa mã "${promotion.code}"?`)) return;
+    setErr(''); setOk('');
+    try { await api(`/promotions/${promotion.id}`, { method: 'DELETE' }); setOk('Đã xóa mã khuyến mãi'); reload(); }
+    catch (x) { setErr(x.message); }
+  };
+  return (
+    <div className="grid lg:grid-cols-[1fr_20rem] gap-4">
+      <div className={C.card + ' overflow-x-auto'}>
+        <Msg m={loadError} />
+        <table className="w-full text-sm"><thead><tr>{['Mã', 'Mức giảm', 'Hết hạn', 'Trạng thái', ''].map(h => <th key={h} className={C.th}>{h}</th>)}</tr></thead>
+          <tbody>{promotions?.map(p => {
+            const expired = p.expiresAt && new Date(p.expiresAt) < new Date();
+            return <tr key={p.id}><td className={C.td + ' font-medium'}>{p.code}</td><td className={C.td}>{p.type === 'PERCENT' ? `${p.value}%` : money(p.value)}</td><td className={C.td}>{p.expiresAt ? new Date(p.expiresAt).toLocaleDateString('vi-VN') : 'Không giới hạn'}</td>
+              <td className={C.td + (expired ? ' text-red-700' : ' text-teal-800')}>{expired ? 'Hết hạn' : 'Đang áp dụng'}</td>
+              <td className={C.td + ' whitespace-nowrap'}><button className="text-teal-800 mr-3" onClick={() => setForm({ id: p.id, code: p.code, type: p.type, value: p.value, expiresAt: p.expiresAt ? p.expiresAt.slice(0, 10) : '' })}>Sửa</button><button className="text-red-700" onClick={() => remove(p)}>Xóa</button></td></tr>;
+          })}</tbody>
+        </table>
+        {!promotions?.length && !loadError && <p className="text-sm text-stone-500">Chưa có mã khuyến mãi.</p>}
+      </div>
+      <form onSubmit={save} className={C.card + ' space-y-2 h-fit'}>
+        <h2 className="font-semibold">{form.id ? 'Sửa mã khuyến mãi' : 'Tạo mã khuyến mãi'}</h2>
+        <label className="text-sm block">Mã<input required minLength="2" maxLength="32" pattern="[A-Za-z0-9_-]+" className={C.inp} value={form.code} onChange={e => setForm({ ...form, code: e.target.value.toUpperCase() })} /></label>
+        <label className="text-sm block">Loại giảm giá<select className={C.inp} value={form.type} onChange={e => setForm({ ...form, type: e.target.value })}><option value="PERCENT">Theo phần trăm</option><option value="AMOUNT">Theo số tiền</option></select></label>
+        <label className="text-sm block">Giá trị{form.type === 'PERCENT' ? ' (%)' : ' (₫)'}<input required type="number" min="1" max={form.type === 'PERCENT' ? 100 : undefined} step="1" className={C.inp} value={form.value} onChange={e => setForm({ ...form, value: e.target.value })} /></label>
+        <label className="text-sm block">Ngày hết hạn (để trống nếu không giới hạn)<input type="date" className={C.inp} value={form.expiresAt} onChange={e => setForm({ ...form, expiresAt: e.target.value })} /></label>
+        <Msg m={err} /><Ok m={ok} />
+        <div className="flex gap-2"><button className={C.btn}>Lưu mã</button>{form.id && <button type="button" className={C.btn2} onClick={() => setForm(empty)}>Hủy sửa</button>}</div>
+      </form>
+    </div>
+  );
+}
+
 // ---------- sản phẩm ----------
 function Products() {
   const empty = { name: '', barcode: '', price: '', cost: 0, minStock: 5, categoryId: '' };
@@ -296,7 +380,7 @@ function Reports() {
 }
 
 // ---------- khung ứng dụng ----------
-const NAV = [['pos', 'Bán hàng', ['SALES'], POS], ['orders', 'Lịch sử đơn', ['SALES'], Orders], ['products', 'Sản phẩm', ['WAREHOUSE'], Products], ['stock', 'Kho', ['WAREHOUSE'], Stock], ['reports', 'Báo cáo và dự báo', [], Reports]];
+const NAV = [['pos', 'Bán hàng', ['SALES'], POS], ['orders', 'Lịch sử đơn', ['SALES'], Orders], ['customers', 'Khách hàng', ['SALES'], Customers], ['products', 'Sản phẩm', ['WAREHOUSE'], Products], ['stock', 'Kho', ['WAREHOUSE'], Stock], ['promotions', 'Khuyến mãi', [], Promotions], ['reports', 'Báo cáo và dự báo', [], Reports]];
 export default function App() {
   const [user, setUser] = useState(() => JSON.parse(localStorage.getItem('user') || 'null'));
   const items = user ? NAV.filter(n => user.role === 'OWNER' || n[2].includes(user.role)) : [];
