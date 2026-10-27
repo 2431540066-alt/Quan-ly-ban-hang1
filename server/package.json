@@ -1,6 +1,22 @@
 {
-  "name": "shop-server", "version": "1.0.0",
-  "scripts": { "start": "node src/index.js", "seed": "node prisma/seed.js", "test": "node --test src/calc.test.js src/insights.test.js src/order-status.test.js" },
-  "dependencies": { "@prisma/client": "^6.0.0", "bcryptjs": "^2.4.3", "cors": "^2.8.5", "exceljs": "^4.4.0", "express": "^4.19.2", "jsonwebtoken": "^9.0.2" },
-  "devDependencies": { "prisma": "^6.0.0" }
+  "name": "shop-server",
+  "version": "1.0.0",
+  "scripts": {
+    "start": "node src/index.js",
+    "seed": "node prisma/seed.js",
+    "test": "node --test src/calc.test.js src/insights.test.js src/order-status.test.js src/payment.test.js"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.0.0",
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "exceljs": "^4.4.0",
+    "express": "^4.19.2",
+    "jsonwebtoken": "^9.0.2",
+    "nodemailer": "^10.2.1"
+  },
+  "devDependencies": {
+    "prisma": "^6.0.0"
+  }
 }

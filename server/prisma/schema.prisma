@@ -8,13 +8,21 @@ datasource db {
 }
 
 model User {
-  id       Int       @id @default(autoincrement())
-  username String    @unique
-  password String
-  name     String
-  role     String // OWNER | SALES | WAREHOUSE | CUSTOMER
-  orders   Order[]
-  customer Customer?
+  id              Int                     @id @default(autoincrement())
+  username        String                  @unique
+  password        String
+  name            String
+  email           String?                 @unique
+  emailVerifiedAt DateTime?
+  role            String // OWNER | SALES | WAREHOUSE | CUSTOMER
+  orders          Order[]
+  customer        Customer?
+  addresses       UserAddress[]
+  favorites       Favorite[]
+  reviews         ProductReview[]
+  resetTokens     PasswordResetToken[]
+  verificationTokens EmailVerificationToken[]
+  returnRequests  ReturnRequest[]
 }
 
 model Category {
@@ -28,6 +36,7 @@ model Product {
   barcode      String?         @unique
   name         String
   description  String?
+  imageUrl     String?
   price        Int
   cost         Float           @default(0)
   stock        Int             @default(0)
@@ -37,6 +46,8 @@ model Product {
   orderItems   OrderItem[]
   receiptItems ReceiptItem[]
   movements    StockMovement[]
+  favorites    Favorite[]
+  reviews      ProductReview[]
 }
 
 model Customer {
@@ -62,13 +73,101 @@ model Order {
   customerId      Int?
   total           Int
   discount        Int         @default(0)
+  shippingFee     Int         @default(0)
   payment         String
+  paymentStatus   String      @default("PAID") // PENDING | PAID | FAILED
   status          String      @default("PAID") // PENDING | CONFIRMED | SHIPPING | PAID | CANCELLED
   shippingAddress String?
+  shippingTrackingCode String?
   createdAt       DateTime    @default(now())
+  completedAt     DateTime?
   user            User        @relation(fields: [userId], references: [id])
   customer        Customer?   @relation(fields: [customerId], references: [id])
   items           OrderItem[]
+  paymentAttempts PaymentAttempt[]
+  returnRequest   ReturnRequest?
+}
+
+model PaymentAttempt {
+  id             Int      @id @default(autoincrement())
+  orderId        Int
+  provider       String
+  transactionRef String   @unique
+  providerTxnId  String?
+  amount         Int
+  status         String   @default("PENDING") // PENDING | PAID | FAILED
+  expiresAt      DateTime
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  order          Order    @relation(fields: [orderId], references: [id])
+}
+
+model UserAddress {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  label     String
+  address   String
+  isDefault Boolean  @default(false)
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Favorite {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  productId Int
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, productId])
+}
+
+model ProductReview {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  productId Int
+  rating    Int
+  comment   String?
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, productId])
+}
+
+model ReturnRequest {
+  id        Int      @id @default(autoincrement())
+  orderId   Int      @unique
+  userId    Int
+  reason    String
+  status    String   @default("PENDING") // PENDING | APPROVED | REJECTED
+  staffNote String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  order     Order    @relation(fields: [orderId], references: [id])
+  user      User     @relation(fields: [userId], references: [id])
+}
+
+model PasswordResetToken {
+  id        Int       @id @default(autoincrement())
+  userId    Int
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model EmailVerificationToken {
+  id        Int       @id @default(autoincrement())
+  userId    Int
+  email     String
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 model OrderItem {
