@@ -247,7 +247,7 @@ app.post('/api/customer/orders', auth('CUSTOMER'), ah(async (req, res) => {
   const customer = await db.customer.findUnique({ where: { userId: req.user.id } });
   if (!customer) throw new Err('Không tìm thấy hồ sơ khách hàng', 404);
   const order = await db.$transaction(tx => createOrder(tx, {
-    userId: req.user.id, customerId: customer.id, items: body.items,
+    userId: req.user.id, customerId: customer.id, items: body.items, code: body.code,
     payment: 'COD', status: 'PENDING', shippingAddress: address,
   }));
   res.status(201).json(order);
