@@ -1,6 +1,25 @@
 const { PrismaClient } = require('@prisma/client'), bcrypt = require('bcryptjs');
 const db = new PrismaClient();
 const rnd = (a, b) => a + Math.random() * (b - a);
+const imageBaseUrl = (process.env.API_PUBLIC_URL || 'http://localhost:4000').replace(/\/+$/, '');
+const productImages = {
+  'Nước suối 500ml': `${imageBaseUrl}/product-images/water-500ml.png`,
+  'Mì ly': `${imageBaseUrl}/product-images/instant-noodles.png`,
+  'Kẹo cao su': `${imageBaseUrl}/product-images/chewing-gum.png`,
+  'Khăn giấy': `${imageBaseUrl}/product-images/tissues.png`,
+  'Bột giặt gói': `${imageBaseUrl}/product-images/laundry-detergent.png`,
+  'Cà phê lon': `${imageBaseUrl}/product-images/canned-coffee.png`,
+  'Coca-Cola lon': `${imageBaseUrl}/product-images/coca-cola.png`,
+  'Bánh quy bơ': `${imageBaseUrl}/product-images/butter-cookies.png`,
+  'Pin AA (vỉ 2)': `${imageBaseUrl}/product-images/aa-batteries.png`,
+  'Sữa tươi hộp': `${imageBaseUrl}/product-images/milk-carton.png`,
+  'Snack khoai tây': `${imageBaseUrl}/product-images/lays-potato-chips.png`,
+};
+async function addMissingProductImages() {
+  for (const [name, imageUrl] of Object.entries(productImages)) {
+    await db.product.updateMany({ where: { name, imageUrl: null }, data: { imageUrl } });
+  }
+}
 (async () => {
   const pw = bcrypt.hashSync('123456', 10);
   if (await db.user.count()) {
@@ -11,6 +30,7 @@ const rnd = (a, b) => a + Math.random() * (b - a);
         await tx.customer.create({ data: { name: customer.name, phone: '0911111111', userId: customer.id } });
       }
     });
+    await addMissingProductImages();
     return console.log('Đã có dữ liệu, giữ nguyên dữ liệu hiện có');
   }
   await db.user.create({ data: { username: 'owner', password: pw, name: 'Chủ cửa hàng', role: 'OWNER' } });
@@ -28,6 +48,7 @@ const rnd = (a, b) => a + Math.random() * (b - a);
   const prods = [];
   for (const [i, [name, c, price, cost, pop]] of list.entries())
     prods.push({ pop, ...(await db.product.create({ data: { name, barcode: '893600' + String(i + 1).padStart(6, '0'), price, cost, stock: Math.round(rnd(25, 120)), minStock: 20, categoryId: cats[c] } })) });
+  await addMissingProductImages();
   await db.promotion.createMany({ data: [
     { code: 'GIAM10', type: 'PERCENT', value: 10 }, { code: 'GIAM20K', type: 'AMOUNT', value: 20000 },
     { code: 'HETHAN', type: 'PERCENT', value: 15, expiresAt: new Date('2025-01-01') } ] });

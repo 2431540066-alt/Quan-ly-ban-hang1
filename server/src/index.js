@@ -5,8 +5,10 @@ const { calcOrder, avgCost } = require('./calc');
 const { buildInsights } = require('./insights');
 const { canTransition } = require('./order-status');
 const { momoCreateSigningData, signMomo, signVnpay, verifyMomo, verifyVnpay, vnpayQueryString } = require('./payment');
+const path = require('node:path');
 const db = new PrismaClient(), app = express();
 const SECRET = process.env.JWT_SECRET || 'dev-secret', FORECAST = process.env.FORECAST_URL || 'http://localhost:8000';
+app.use('/product-images', express.static(path.join(__dirname, '../public/product-images')));
 app.use(cors(), express.json({ limit: '1mb' }));
 
 class Err extends Error { constructor(m, s = 400) { super(m); this.status = s; } }
