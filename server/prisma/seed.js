@@ -4,6 +4,7 @@ const rnd = (a, b) => a + Math.random() * (b - a);
 const imageBaseUrl = (process.env.API_PUBLIC_URL || 'http://localhost:4000').replace(/\/+$/, '');
 const productImages = {
   'Nước suối 500ml': `${imageBaseUrl}/product-images/water-500ml.png`,
+  'Trà xanh 0 độ': `${imageBaseUrl}/product-images/green-tea-zero.png`,
   'Mì ly': `${imageBaseUrl}/product-images/instant-noodles.png`,
   'Kẹo cao su': `${imageBaseUrl}/product-images/chewing-gum.png`,
   'Khăn giấy': `${imageBaseUrl}/product-images/tissues.png`,
