@@ -15,6 +15,16 @@ const productImages = {
   'Pin AA (vỉ 2)': `${imageBaseUrl}/product-images/aa-batteries.png`,
   'Sữa tươi hộp': `${imageBaseUrl}/product-images/milk-carton.png`,
   'Snack khoai tây': `${imageBaseUrl}/product-images/lays-potato-chips.png`,
+  'Bia Heineken 330ml': `${imageBaseUrl}/product-images/coca-cola.png`,
+  'Nước ép cam 1L': `${imageBaseUrl}/product-images/water-500ml.png`,
+  'Xà phòng tay': `${imageBaseUrl}/product-images/tissues.png`,
+  'Dầu ăn 1L': `${imageBaseUrl}/product-images/milk-carton.png`,
+  'Sữa chua hương dâu': `${imageBaseUrl}/product-images/milk-carton.png`,
+  'Bánh gạo cay': `${imageBaseUrl}/product-images/butter-cookies.png`,
+  'Hạt điều rang': `${imageBaseUrl}/product-images/lays-potato-chips.png`,
+  'Nước mắm 500ml': `${imageBaseUrl}/product-images/water-500ml.png`,
+  'Bánh mì sandwich': `${imageBaseUrl}/product-images/butter-cookies.png`,
+  'Xúc xích gà': `${imageBaseUrl}/product-images/instant-noodles.png`,
 };
 async function addMissingProductImages() {
   for (const [name, imageUrl] of Object.entries(productImages)) {
@@ -45,6 +55,10 @@ async function addMissingProductImages() {
     ['Cà phê lon', 'Đồ uống', 14000, 9500, 4], ['Sữa tươi hộp', 'Đồ uống', 9000, 6500, 5], ['Snack khoai tây', 'Đồ ăn vặt', 8000, 5500, 6],
     ['Bánh quy bơ', 'Đồ ăn vặt', 15000, 10500, 3], ['Kẹo cao su', 'Đồ ăn vặt', 5000, 3000, 5], ['Mì ly', 'Đồ ăn vặt', 12000, 8500, 6],
     ['Khăn giấy', 'Gia dụng', 18000, 12500, 2], ['Bột giặt gói', 'Gia dụng', 7000, 4500, 3], ['Pin AA (vỉ 2)', 'Gia dụng', 20000, 14000, 1.5],
+    ['Bia Heineken 330ml', 'Đồ uống', 22000, 16000, 5], ['Nước ép cam 1L', 'Đồ uống', 25000, 18000, 4], ['Xà phòng tay', 'Gia dụng', 15000, 11000, 3],
+    ['Dầu ăn 1L', 'Gia dụng', 32000, 26000, 4], ['Sữa chua hương dâu', 'Đồ ăn vặt', 12000, 8500, 6], ['Bánh gạo cay', 'Đồ ăn vặt', 16000, 11000, 4],
+    ['Hạt điều rang', 'Đồ ăn vặt', 24000, 17000, 2.5], ['Nước mắm 500ml', 'Gia dụng', 28000, 21000, 2], ['Bánh mì sandwich', 'Đồ ăn vặt', 18000, 12000, 3.5],
+    ['Xúc xích gà', 'Đồ ăn vặt', 19000, 13500, 4],
   ];
   const prods = [];
   for (const [i, [name, c, price, cost, pop]] of list.entries())
