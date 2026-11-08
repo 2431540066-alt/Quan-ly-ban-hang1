@@ -25,20 +25,27 @@ const productImages = {
   'Pin AA (vỉ 2)': `${imageBaseUrl}/product-images/aa-batteries.png`,
   'Sữa tươi hộp': `${imageBaseUrl}/product-images/milk-carton.png`,
   'Snack khoai tây': `${imageBaseUrl}/product-images/lays-potato-chips.png`,
-  'Bia Heineken 330ml': `${imageBaseUrl}/product-images/coca-cola.png`,
-  'Nước ép cam 1L': `${imageBaseUrl}/product-images/water-500ml.png`,
-  'Xà phòng tay': `${imageBaseUrl}/product-images/tissues.png`,
-  'Dầu ăn 1L': `${imageBaseUrl}/product-images/milk-carton.png`,
+  'Bia Heineken 330ml': `${imageBaseUrl}/product-images/heineken-beer.png`,
+  'Nước ép cam 1L': `${imageBaseUrl}/product-images/orange-juice.png`,
+  'Xà phòng tay': `${imageBaseUrl}/product-images/hand-soap.png`,
+  'Dầu ăn 1L': `${imageBaseUrl}/product-images/cooking-oil.png`,
   'Sữa chua hương dâu': `${imageBaseUrl}/product-images/milk-carton.png`,
-  'Bánh gạo cay': `${imageBaseUrl}/product-images/butter-cookies.png`,
-  'Hạt điều rang': `${imageBaseUrl}/product-images/lays-potato-chips.png`,
-  'Nước mắm 500ml': `${imageBaseUrl}/product-images/water-500ml.png`,
-  'Bánh mì sandwich': `${imageBaseUrl}/product-images/butter-cookies.png`,
-  'Xúc xích gà': `${imageBaseUrl}/product-images/instant-noodles.png`,
+  'Bánh gạo cay': `${imageBaseUrl}/product-images/spicy-rice-cake.png`,
+  'Hạt điều rang': `${imageBaseUrl}/product-images/roasted-cashews.png`,
+  'Nước mắm 500ml': `${imageBaseUrl}/product-images/fish-sauce.png`,
+  'Bánh mì sandwich': `${imageBaseUrl}/product-images/sandwich-bread.png`,
+  'Xúc xích gà': `${imageBaseUrl}/product-images/chicken-sausage.png`,
 };
+const replaceProductImages = new Set([
+  'Bia Heineken 330ml', 'Nước ép cam 1L', 'Xà phòng tay', 'Dầu ăn 1L',
+  'Bánh gạo cay', 'Hạt điều rang', 'Nước mắm 500ml', 'Bánh mì sandwich', 'Xúc xích gà',
+]);
 async function addMissingProductImages() {
   for (const [name, imageUrl] of Object.entries(productImages)) {
-    await db.product.updateMany({ where: { name, imageUrl: null }, data: { imageUrl } });
+    await db.product.updateMany({
+      where: { name, ...(replaceProductImages.has(name) ? {} : { imageUrl: null }) },
+      data: { imageUrl },
+    });
   }
 }
 async function addMissingDemoProducts() {
