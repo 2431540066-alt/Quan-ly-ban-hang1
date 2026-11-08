@@ -259,7 +259,7 @@ app.get('/api/store/products', ah(async (req, res) => {
     ...(q ? { OR: [{ name: { contains: q, mode: 'insensitive' } }, { barcode: { contains: q } }] } : {}),
     ...(categoryId ? { categoryId } : {}),
   };
-  const pg = pageArgs(req.query, 24);
+  const pg = pageArgs(req.query, 12);
   const [products, total] = await Promise.all([
     db.product.findMany({ where, include: { category: true, _count: { select: { reviews: true } } }, orderBy: { name: 'asc' }, skip: pg.skip, take: pg.take }),
     db.product.count({ where }),
