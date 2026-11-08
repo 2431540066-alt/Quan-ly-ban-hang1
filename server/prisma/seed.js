@@ -2,6 +2,16 @@ const { PrismaClient } = require('@prisma/client'), bcrypt = require('bcryptjs')
 const db = new PrismaClient();
 const rnd = (a, b) => a + Math.random() * (b - a);
 const imageBaseUrl = (process.env.API_PUBLIC_URL || 'http://localhost:4000').replace(/\/+$/, '');
+const list = [ // tên, danh mục, giá bán, giá vốn, độ phổ biến
+  ['Nước suối 500ml', 'Đồ uống', 6000, 3500, 9], ['Coca-Cola lon', 'Đồ uống', 12000, 8500, 7], ['Trà xanh 0 độ', 'Đồ uống', 10000, 7000, 6],
+  ['Cà phê lon', 'Đồ uống', 14000, 9500, 4], ['Sữa tươi hộp', 'Đồ uống', 9000, 6500, 5], ['Snack khoai tây', 'Đồ ăn vặt', 8000, 5500, 6],
+  ['Bánh quy bơ', 'Đồ ăn vặt', 15000, 10500, 3], ['Kẹo cao su', 'Đồ ăn vặt', 5000, 3000, 5], ['Mì ly', 'Đồ ăn vặt', 12000, 8500, 6],
+  ['Khăn giấy', 'Gia dụng', 18000, 12500, 2], ['Bột giặt gói', 'Gia dụng', 7000, 4500, 3], ['Pin AA (vỉ 2)', 'Gia dụng', 20000, 14000, 1.5],
+  ['Bia Heineken 330ml', 'Đồ uống', 22000, 16000, 5], ['Nước ép cam 1L', 'Đồ uống', 25000, 18000, 4], ['Xà phòng tay', 'Gia dụng', 15000, 11000, 3],
+  ['Dầu ăn 1L', 'Gia dụng', 32000, 26000, 4], ['Sữa chua hương dâu', 'Đồ ăn vặt', 12000, 8500, 6], ['Bánh gạo cay', 'Đồ ăn vặt', 16000, 11000, 4],
+  ['Hạt điều rang', 'Đồ ăn vặt', 24000, 17000, 2.5], ['Nước mắm 500ml', 'Gia dụng', 28000, 21000, 2], ['Bánh mì sandwich', 'Đồ ăn vặt', 18000, 12000, 3.5],
+  ['Xúc xích gà', 'Đồ ăn vặt', 19000, 13500, 4],
+];
 const productImages = {
   'Nước suối 500ml': `${imageBaseUrl}/product-images/water-500ml.png`,
   'Trà xanh 0 độ': `${imageBaseUrl}/product-images/green-tea-zero.png`,
@@ -31,6 +41,27 @@ async function addMissingProductImages() {
     await db.product.updateMany({ where: { name, imageUrl: null }, data: { imageUrl } });
   }
 }
+async function addMissingDemoProducts() {
+  const categories = new Map((await db.category.findMany()).map(category => [category.name, category.id]));
+  for (const [, categoryName] of list) {
+    if (!categories.has(categoryName)) {
+      const category = await db.category.create({ data: { name: categoryName } });
+      categories.set(categoryName, category.id);
+    }
+  }
+  let added = 0;
+  for (const [i, [name, categoryName, price, cost]] of list.entries()) {
+    if (await db.product.findFirst({ where: { name } })) continue;
+    const barcode = '893600' + String(i + 1).padStart(6, '0');
+    const barcodeTaken = await db.product.findUnique({ where: { barcode } });
+    await db.product.create({ data: {
+      name, barcode: barcodeTaken ? null : barcode, price, cost,
+      stock: Math.round(rnd(25, 120)), minStock: 20, categoryId: categories.get(categoryName),
+    } });
+    added++;
+  }
+  return added;
+}
 (async () => {
   const pw = bcrypt.hashSync('123456', 10);
   if (await db.user.count()) {
@@ -41,8 +72,9 @@ async function addMissingProductImages() {
         await tx.customer.create({ data: { name: customer.name, phone: '0911111111', userId: customer.id } });
       }
     });
+    const added = await addMissingDemoProducts();
     await addMissingProductImages();
-    return console.log('Đã có dữ liệu, giữ nguyên dữ liệu hiện có');
+    return console.log(added ? `Đã bổ sung ${added} sản phẩm mẫu còn thiếu` : 'Đã có dữ liệu, không cần bổ sung sản phẩm');
   }
   await db.user.create({ data: { username: 'owner', password: pw, name: 'Chủ cửa hàng', role: 'OWNER' } });
   const sales = await db.user.create({ data: { username: 'sales', password: pw, name: 'Nhân viên bán hàng', role: 'SALES' } });
@@ -50,16 +82,6 @@ async function addMissingProductImages() {
   const customer = await db.user.create({ data: { username: 'customer', password: pw, name: 'Khách hàng mẫu', role: 'CUSTOMER' } });
   const cats = {};
   for (const n of ['Đồ uống', 'Đồ ăn vặt', 'Gia dụng']) cats[n] = (await db.category.create({ data: { name: n } })).id;
-  const list = [ // tên, danh mục, giá bán, giá vốn, độ phổ biến
-    ['Nước suối 500ml', 'Đồ uống', 6000, 3500, 9], ['Coca-Cola lon', 'Đồ uống', 12000, 8500, 7], ['Trà xanh 0 độ', 'Đồ uống', 10000, 7000, 6],
-    ['Cà phê lon', 'Đồ uống', 14000, 9500, 4], ['Sữa tươi hộp', 'Đồ uống', 9000, 6500, 5], ['Snack khoai tây', 'Đồ ăn vặt', 8000, 5500, 6],
-    ['Bánh quy bơ', 'Đồ ăn vặt', 15000, 10500, 3], ['Kẹo cao su', 'Đồ ăn vặt', 5000, 3000, 5], ['Mì ly', 'Đồ ăn vặt', 12000, 8500, 6],
-    ['Khăn giấy', 'Gia dụng', 18000, 12500, 2], ['Bột giặt gói', 'Gia dụng', 7000, 4500, 3], ['Pin AA (vỉ 2)', 'Gia dụng', 20000, 14000, 1.5],
-    ['Bia Heineken 330ml', 'Đồ uống', 22000, 16000, 5], ['Nước ép cam 1L', 'Đồ uống', 25000, 18000, 4], ['Xà phòng tay', 'Gia dụng', 15000, 11000, 3],
-    ['Dầu ăn 1L', 'Gia dụng', 32000, 26000, 4], ['Sữa chua hương dâu', 'Đồ ăn vặt', 12000, 8500, 6], ['Bánh gạo cay', 'Đồ ăn vặt', 16000, 11000, 4],
-    ['Hạt điều rang', 'Đồ ăn vặt', 24000, 17000, 2.5], ['Nước mắm 500ml', 'Gia dụng', 28000, 21000, 2], ['Bánh mì sandwich', 'Đồ ăn vặt', 18000, 12000, 3.5],
-    ['Xúc xích gà', 'Đồ ăn vặt', 19000, 13500, 4],
-  ];
   const prods = [];
   for (const [i, [name, c, price, cost, pop]] of list.entries())
     prods.push({ pop, ...(await db.product.create({ data: { name, barcode: '893600' + String(i + 1).padStart(6, '0'), price, cost, stock: Math.round(rnd(25, 120)), minStock: 20, categoryId: cats[c] } })) });
