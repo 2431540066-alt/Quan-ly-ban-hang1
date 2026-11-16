@@ -3,7 +3,8 @@ const express = require('express'), cors = require('cors'), jwt = require('jsonw
 const { PrismaClient } = require('@prisma/client');
 const { calcOrder, avgCost } = require('./calc');
 const { buildInsights } = require('./insights');
-const { summarizeOrders } = require('./reports');
+const { summarizeOrders, summarizeBreakdowns } = require('./reports');
+const { isExpired } = require('./product-expiry');
 const { canTransition } = require('./order-status');
 const { momoCreateSigningData, signMomo, signVnpay, verifyMomo, verifyVnpay, vnpayQueryString } = require('./payment');
 const path = require('node:path');
@@ -65,7 +66,41 @@ const auth = (...roles) => (req, res, next) => {
   if (roles.length && req.user.role !== 'OWNER' && !roles.includes(req.user.role)) return res.status(403).json({ error: 'Bạn không có quyền thực hiện chức năng này' });
   next();
 };
+const OWN = auth('OWNER');
 const posInt = (v, msg) => { const n = Number(v); if (!Number.isInteger(n) || n <= 0 || n > 2147483647) throw new Err(msg); return n; };
+function dateOnly(value, message) {
+  if (value == null || value === '') return null;
+  const text = String(value);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) throw new Err(message);
+  const date = new Date(`${text}T00:00:00.000Z`);
+  if (Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== text) throw new Err(message);
+  return date;
+}
+app.use((req, res, next) => {
+  const sendJson = res.json.bind(res);
+  let auditRecorded = false;
+  res.json = body => {
+    const actor = req.user;
+    const shouldAudit = !auditRecorded && actor && actor.role !== 'CUSTOMER' &&
+      ['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method) && res.statusCode < 400;
+    if (!shouldAudit) return sendJson(body);
+    auditRecorded = true;
+    return db.auditLog.create({
+      data: {
+        actorId: actor.id,
+        actorName: actor.name || 'Không rõ',
+        actorRole: actor.role,
+        method: req.method,
+        path: req.route?.path || req.path,
+        statusCode: res.statusCode,
+      },
+    }).then(() => sendJson(body), error => {
+      console.error('Không lưu được lịch sử thao tác:', error.message);
+      next(error);
+    });
+  };
+  next();
+});
 
 // ---- Đăng nhập
 app.post('/api/login', ah(async (req, res) => {
@@ -136,6 +171,18 @@ app.delete('/api/staff/:id', auth('OWNER'), ah(async (req, res) => {
   if (!user || !['SALES', 'WAREHOUSE'].includes(user.role)) throw new Err('Không tìm thấy tài khoản nhân viên', 404);
   await db.user.delete({ where: { id } });
   res.json({ ok: true });
+}));
+app.get('/api/audit', auth('OWNER'), ah(async (req, res) => {
+  const pg = pageArgs(req.query, 50);
+  const where = {
+    ...(req.query.actorId ? { actorId: posInt(req.query.actorId, 'Nhân viên không hợp lệ') } : {}),
+    ...(req.query.role ? { actorRole: String(req.query.role) } : {}),
+  };
+  const [items, total] = await Promise.all([
+    db.auditLog.findMany({ where, orderBy: { createdAt: 'desc' }, skip: pg.skip, take: pg.take }),
+    db.auditLog.count({ where }),
+  ]);
+  res.json(paginated(items, total, pg.page, pg.pageSize));
 }));
 
 // ---- Hồ sơ, địa chỉ và khôi phục tài khoản khách
@@ -265,8 +312,8 @@ app.get('/api/store/products', ah(async (req, res) => {
     db.product.findMany({ where, include: { category: true, _count: { select: { reviews: true } } }, orderBy: { name: 'asc' }, skip: pg.skip, take: pg.take }),
     db.product.count({ where }),
   ]);
-  res.json(paginated(products.map(({ id, name, description, imageUrl, price, stock, barcode, category, _count }) => ({
-    id, name, description, imageUrl, price, inStock: stock > 0, barcode, category, reviewCount: _count.reviews,
+  res.json(paginated(products.map(({ id, name, description, imageUrl, price, stock, barcode, category, expiryDate, _count }) => ({
+    id, name, description, imageUrl, price, inStock: stock > 0 && !isExpired(expiryDate), barcode, category, reviewCount: _count.reviews,
   })), total, pg.page, pg.pageSize));
 }));
 app.get('/api/categories', auth('SALES', 'WAREHOUSE'), ah(async (_, res) => res.json(await db.category.findMany({ orderBy: { name: 'asc' } }))));
@@ -283,7 +330,7 @@ const prodData = b => {
   const categoryId = b.categoryId ? Number(b.categoryId) : null;
   const description = String(b.description || '').trim();
   const imageUrl = String(b.imageUrl || '').trim();
-  const d = { name: String(b.name || '').trim(), description: description || null, imageUrl: imageUrl || null, barcode: b.barcode ? String(b.barcode).trim() : null, price: Math.round(price), cost, minStock: Math.round(minStock), categoryId };
+  const d = { name: String(b.name || '').trim(), description: description || null, imageUrl: imageUrl || null, barcode: b.barcode ? String(b.barcode).trim() : null, price: Math.round(price), cost, minStock: Math.round(minStock), categoryId, expiryDate: dateOnly(b.expiryDate, 'Ngày hết hạn sản phẩm không hợp lệ') };
   if (!d.name) throw new Err('Thiếu tên sản phẩm');
   if (d.name.length > 160 || description.length > 2000 || imageUrl.length > 2048) throw new Err('Tên, mô tả hoặc đường dẫn ảnh quá dài');
   if (imageUrl) {
@@ -437,6 +484,7 @@ async function createOrder(tx, { userId, performedById = null, items, code, cust
   for (const [id, qty] of quantities) {
     const p = await tx.product.findUnique({ where: { id } });
     if (!p) throw new Err('Sản phẩm không tồn tại');
+    if (isExpired(p.expiryDate)) throw new Err(`"${p.name}" đã hết hạn sử dụng`);
     lines.push({ productId: p.id, qty, price: p.price, cost: p.cost, name: p.name });
   }
   const t = calcOrder(lines, code ? await findPromo(code, tx) : null);
@@ -897,8 +945,36 @@ app.get('/api/stock', WH, ah(async (req, res) => {
 }));
 app.get('/api/stock/movements', WH, ah(async (_, res) => res.json(await db.stockMovement.findMany({ orderBy: { id: 'desc' }, take: 100, include: { product: true, performedBy: { select: { name: true } } } }))));
 
+// ---- Chi phí vận hành
+function expenseData(body) {
+  const category = String(body.category || '').trim(), description = String(body.description || '').trim();
+  const amount = Number(body.amount), occurredAt = dateOnly(body.occurredAt, 'Ngày chi phí không hợp lệ') || new Date();
+  if (!category || category.length > 80) throw new Err('Loại chi phí không hợp lệ');
+  if (!description || description.length > 300) throw new Err('Mô tả chi phí phải có từ 1 đến 300 ký tự');
+  if (!Number.isInteger(amount) || amount <= 0 || amount > 2147483647) throw new Err('Số tiền chi phí phải là số nguyên dương hợp lệ');
+  return { category, description, amount, occurredAt };
+}
+app.get('/api/expenses', OWN, ah(async (req, res) => {
+  const pg = pageArgs(req.query, 50), where = { occurredAt: range(req.query) };
+  const [items, total] = await Promise.all([
+    db.expense.findMany({ where, orderBy: { occurredAt: 'desc' }, skip: pg.skip, take: pg.take, include: { createdBy: { select: { name: true } } } }),
+    db.expense.count({ where }),
+  ]);
+  res.json(paginated(items, total, pg.page, pg.pageSize));
+}));
+app.post('/api/expenses', OWN, ah(async (req, res) => {
+  res.status(201).json(await db.expense.create({ data: { ...expenseData(req.body || {}), createdById: req.user.id } }));
+}));
+app.put('/api/expenses/:id', OWN, ah(async (req, res) => {
+  const id = posInt(req.params.id, 'Chi phí không hợp lệ');
+  res.json(await db.expense.update({ where: { id }, data: expenseData(req.body || {}) }));
+}));
+app.delete('/api/expenses/:id', OWN, ah(async (req, res) => {
+  await db.expense.delete({ where: { id: posInt(req.params.id, 'Chi phí không hợp lệ') } });
+  res.json({ ok: true });
+}));
+
 // ---- Báo cáo (chỉ chủ cửa hàng)
-const OWN = auth('OWNER');
 const day = d => new Date(d.getTime() + 7 * 36e5).toISOString().slice(0, 10); // theo giờ Việt Nam
 function range(q) {
   const to = q.to ? new Date(q.to + 'T23:59:59+07:00') : new Date();
@@ -906,16 +982,32 @@ function range(q) {
   if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime()) || from > to) throw new Err('Khoảng thời gian báo cáo không hợp lệ');
   return { gte: from, lte: to };
 }
-const paid = q => db.order.findMany({ where: { status: 'PAID', createdAt: range(q) }, include: { items: { include: { product: true } } } });
+const paid = q => db.order.findMany({
+  where: { status: 'PAID', createdAt: range(q) },
+  include: {
+    user: { select: { name: true, role: true } },
+    customer: { select: { name: true } },
+    returnRequest: true,
+    items: { include: { product: { include: { category: true } } } },
+  },
+});
 async function summary(q) {
-  return summarizeOrders(await paid(q));
+  const [orders, expenses] = await Promise.all([
+    paid(q),
+    db.expense.findMany({ where: { occurredAt: range(q) }, orderBy: { occurredAt: 'desc' } }),
+  ]);
+  return summarizeOrders(orders, expenses);
 }
 app.get('/api/reports/summary', OWN, ah(async (req, res) => res.json(await summary(req.query))));
+app.get('/api/reports/breakdown', OWN, ah(async (req, res) => res.json(summarizeBreakdowns(await paid(req.query)))));
 app.get('/api/reports/top-products', OWN, ah(async (req, res) => {
   const m = {};
-  for (const o of await paid(req.query)) for (const i of o.items) {
+  for (const o of await paid(req.query)) {
+    if (o.returnRequest?.refundStatus === 'COMPLETED') continue;
+    for (const i of o.items) {
     const r = m[i.productId] ||= { productId: i.productId, name: i.product.name, qty: 0, revenue: 0 };
     r.qty += i.qty; r.revenue += i.qty * i.price;
+    }
   }
   res.json(Object.values(m).sort((a, b) => b.qty - a.qty).slice(0, 10));
 }));
@@ -924,7 +1016,7 @@ app.get('/api/assistant/insights', OWN, ah(async (_, res) => {
   const [orders, products] = await Promise.all([
     db.order.findMany({
       where: { status: 'PAID', createdAt: { gte: since } },
-      select: { total: true, discount: true, items: { select: { productId: true, qty: true, price: true, product: { select: { name: true } } } } },
+      select: { total: true, discount: true, returnRequest: { select: { refundStatus: true } }, items: { select: { productId: true, qty: true, price: true, product: { select: { name: true } } } } },
     }),
     db.product.findMany({ select: { id: true, name: true, stock: true, minStock: true } }),
   ]);
@@ -932,20 +1024,56 @@ app.get('/api/assistant/insights', OWN, ah(async (_, res) => {
 }));
 app.get('/api/reports/export', OWN, ah(async (req, res) => {
   if ((req.query.format || 'xlsx') !== 'xlsx') throw new Err('Hiện chỉ hỗ trợ xuất Excel (xlsx)');
-  const s = await summary(req.query), wb = new ExcelJS.Workbook(), ws = wb.addWorksheet('Tổng quan');
+  const [orders, expenses] = await Promise.all([
+    paid(req.query),
+    db.expense.findMany({ where: { occurredAt: range(req.query) }, include: { createdBy: { select: { name: true } } }, orderBy: { occurredAt: 'desc' } }),
+  ]);
+  const s = summarizeOrders(orders, expenses), breakdowns = summarizeBreakdowns(orders), wb = new ExcelJS.Workbook(), ws = wb.addWorksheet('Tổng quan');
   ws.addRows([
     ['Doanh thu sản phẩm (trước giảm giá)', s.productRevenue],
     ['Giảm giá', s.discount],
     ['Phí vận chuyển thu', s.shippingRevenue],
+    ['Hoàn tiền', s.refunds],
+    ['Đơn đã hoàn tiền', s.returnedOrders],
     ['Doanh thu thuần sản phẩm', s.revenue],
     ['Giá vốn hàng bán', s.cogs],
+    ['Chi phí vận hành', s.expenses],
     ['Lợi nhuận tạm tính', s.profit],
     ['Tổng thu đơn hàng', s.totalCollected],
     ['Số đơn', s.orders],
     ['Giá trị đơn TB', s.avg],
   ]);
   const d = wb.addWorksheet('Doanh thu theo ngày'); d.addRow(['Ngày', 'Doanh thu thuần sản phẩm']).font = { bold: true }; s.daily.forEach(r => d.addRow([r.date, r.revenue]));
+  const orderSheet = wb.addWorksheet('Chi tiết đơn hàng');
+  orderSheet.addRow(['Mã đơn', 'Ngày', 'Nhân viên / kênh', 'Khách hàng', 'Thanh toán', 'Trạng thái', 'Doanh thu sản phẩm', 'Giảm giá', 'Phí vận chuyển', 'Hoàn tiền', 'Tổng đơn']).font = { bold: true };
+  for (const order of orders) {
+    orderSheet.addRow([
+      order.id, day(order.createdAt), order.user.role === 'CUSTOMER' ? 'Bán trực tuyến' : order.user.name,
+      order.customer?.name || 'Khách lẻ', order.payment, order.status,
+      order.items.reduce((sum, item) => sum + item.price * item.qty, 0), order.discount, order.shippingFee,
+      order.returnRequest?.refundStatus === 'COMPLETED' ? order.returnRequest.refundAmount : 0, order.total,
+    ]);
+  }
+  const itemSheet = wb.addWorksheet('Chi tiết sản phẩm');
+  itemSheet.addRow(['Mã đơn', 'Sản phẩm', 'Danh mục', 'Số lượng', 'Đơn giá', 'Doanh thu', 'Giá vốn']).font = { bold: true };
+  for (const order of orders) for (const item of order.items) {
+    itemSheet.addRow([order.id, item.product.name, item.product.category?.name || 'Chưa phân loại', item.qty, item.price, item.qty * item.price, item.qty * item.cost]);
+  }
+  const addBreakdownSheet = (name, headings, rows) => {
+    const sheet = wb.addWorksheet(name);
+    sheet.addRow(headings).font = { bold: true };
+    for (const row of rows) sheet.addRow(Object.values(row));
+    sheet.getColumn(1).width = 28;
+  };
+  addBreakdownSheet('Theo nhân viên', ['Nhân viên / kênh', 'Số đơn', 'Đơn đã hoàn', 'Tổng thu'], breakdowns.employees.map(({ name, orders, returnedOrders, revenue }) => ({ name, orders, returnedOrders, revenue })));
+  addBreakdownSheet('Theo danh mục', ['Danh mục', 'Số lượng', 'Doanh thu sản phẩm'], breakdowns.categories.map(({ name, quantity, revenue }) => ({ name, quantity, revenue })));
+  addBreakdownSheet('Theo thanh toán', ['Phương thức', 'Số đơn', 'Đơn đã hoàn', 'Tổng thu'], breakdowns.payments.map(({ method, orders, returnedOrders, revenue }) => ({ method, orders, returnedOrders, revenue })));
+  const expenseSheet = wb.addWorksheet('Chi phí');
+  expenseSheet.addRow(['Ngày', 'Loại', 'Mô tả', 'Số tiền', 'Người ghi']).font = { bold: true };
+  for (const expense of expenses) expenseSheet.addRow([day(expense.occurredAt), expense.category, expense.description, expense.amount, expense.createdBy?.name || '—']);
   ws.getColumn(1).width = 40; ws.getColumn(2).width = 20; d.getColumn(1).width = 14; d.getColumn(2).width = 30;
+  orderSheet.columns.forEach(column => { column.width = Math.max(column.width || 0, 16); });
+  itemSheet.columns.forEach(column => { column.width = Math.max(column.width || 0, 16); });
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   res.setHeader('Content-Disposition', 'attachment; filename=bao-cao.xlsx');
   res.send(Buffer.from(await wb.xlsx.writeBuffer()));
@@ -996,8 +1124,54 @@ async function expirePaymentAttempts() {
     if (changed) await sendOrderNotification(attempt.orderId, `Đơn hàng #${attempt.orderId} hết hạn thanh toán`, `Đơn hàng #${attempt.orderId} đã được hủy do hết thời gian thanh toán.`);
   }
 }
+async function alertLowStockProducts() {
+  const [products, openAlerts] = await Promise.all([
+    db.product.findMany({ select: { id: true, name: true, stock: true, minStock: true } }),
+    db.lowStockAlert.findMany({ where: { resolvedAt: null } }),
+  ]);
+  const lowProducts = products.filter(product => product.stock <= product.minStock);
+  const lowIds = new Set(lowProducts.map(product => product.id));
+  const resolvedAt = new Date();
+  for (const alert of openAlerts) {
+    if (!lowIds.has(alert.productId)) await db.lowStockAlert.update({ where: { id: alert.id }, data: { resolvedAt } });
+  }
+  if (!lowProducts.length) return;
+  const activeAlerts = await db.lowStockAlert.findMany({ where: { productId: { in: [...lowIds] }, resolvedAt: null }, select: { productId: true } });
+  const activeIds = new Set(activeAlerts.map(alert => alert.productId));
+  const newlyLow = lowProducts.filter(product => !activeIds.has(product.id));
+  if (!newlyLow.length) return;
+  if (!mailer) {
+    console.warn('Không gửi cảnh báo tồn kho thấp: chưa cấu hình SMTP');
+    return;
+  }
+  const alertRecipient = String(process.env.LOW_STOCK_ALERT_EMAIL || '').trim();
+  const owners = alertRecipient ? [] : await db.user.findMany({ where: { role: 'OWNER', email: { not: null } }, select: { email: true } });
+  const recipients = alertRecipient || owners.map(owner => owner.email).join(',');
+  if (!recipients) {
+    console.warn('Không gửi cảnh báo tồn kho thấp: chưa có email quản trị viên');
+    return;
+  }
+  const message = newlyLow.map(product => `- ${product.name}: còn ${product.stock}, mức tối thiểu ${product.minStock}`).join('\n');
+  await sendMail(recipients, 'Cảnh báo tồn kho thấp', `Các sản phẩm vừa chạm ngưỡng tồn tối thiểu:\n${message}`);
+  const lastAlertedAt = new Date();
+  for (const product of newlyLow) {
+    await db.lowStockAlert.upsert({
+      where: { productId: product.id },
+      create: { productId: product.id, lastAlertedAt },
+      update: { lastAlertedAt, resolvedAt: null },
+    });
+  }
+}
 const expiryTimer = setInterval(() => {
   expirePaymentAttempts().catch(error => console.error('Dọn giao dịch thanh toán hết hạn thất bại:', error.message));
 }, 60 * 1000);
 expiryTimer.unref();
+const lowStockTimer = setInterval(() => {
+  alertLowStockProducts().catch(error => console.error('Gửi cảnh báo tồn kho thấp thất bại:', error.message));
+}, 24 * 60 * 60 * 1000);
+lowStockTimer.unref();
+const lowStockStartupTimer = setTimeout(() => {
+  alertLowStockProducts().catch(error => console.error('Gửi cảnh báo tồn kho thấp thất bại:', error.message));
+}, 60 * 1000);
+lowStockStartupTimer.unref();
 app.listen(4000, () => console.log('API chạy ở cổng 4000'));

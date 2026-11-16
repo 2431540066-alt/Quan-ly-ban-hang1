@@ -26,6 +26,8 @@ model User {
   stockMovements  StockMovement[]        @relation("StockMovementPerformer")
   receivedReturns ReturnRequest[]        @relation("ReturnReceivedBy")
   refundedReturns ReturnRequest[]        @relation("ReturnRefundedBy")
+  auditLogs       AuditLog[]             @relation("AuditActor")
+  expenses        Expense[]              @relation("ExpenseCreator")
 }
 
 model Category {
@@ -44,11 +46,13 @@ model Product {
   cost         Float           @default(0)
   stock        Int             @default(0)
   minStock     Int             @default(5)
+  expiryDate   DateTime?
   categoryId   Int?
   category     Category?       @relation(fields: [categoryId], references: [id])
   orderItems   OrderItem[]
   receiptItems ReceiptItem[]
   movements    StockMovement[]
+  lowStockAlert LowStockAlert?
   favorites    Favorite[]
   reviews      ProductReview[]
 }
@@ -231,4 +235,41 @@ model StockMovement {
   createdAt     DateTime @default(now())
   product       Product  @relation(fields: [productId], references: [id])
   performedBy   User?    @relation("StockMovementPerformer", fields: [performedById], references: [id])
+}
+
+model AuditLog {
+  id         Int      @id @default(autoincrement())
+  actorId    Int?
+  actorName  String
+  actorRole  String
+  method     String
+  path       String
+  statusCode Int
+  createdAt  DateTime @default(now())
+  actor      User?    @relation("AuditActor", fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([createdAt])
+  @@index([actorId, createdAt])
+}
+
+model Expense {
+  id          Int      @id @default(autoincrement())
+  category    String
+  description String
+  amount      Int
+  occurredAt  DateTime @default(now())
+  createdById Int?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  createdBy   User?    @relation("ExpenseCreator", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([occurredAt])
+}
+
+model LowStockAlert {
+  id             Int      @id @default(autoincrement())
+  productId      Int      @unique
+  lastAlertedAt  DateTime
+  resolvedAt     DateTime?
+  product        Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
 }

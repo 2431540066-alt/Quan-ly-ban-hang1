@@ -19,6 +19,15 @@ test('insights exclude shipping and discount from product revenue', () => {
   assert.match(result.messages[0], /doanh thu sản phẩm sau giảm giá 9\.000/);
 });
 
+test('insights do not count fully refunded orders as sales', () => {
+  const result = buildInsights([
+    { discount: 0, returnRequest: { refundStatus: 'COMPLETED' }, items: [{ productId: 1, qty: 2, price: 10000, product: { name: 'Nước' } }] },
+  ], []);
+  assert.equal(result.revenue, 0);
+  assert.equal(result.orderCount, 0);
+  assert.deepEqual(result.topProducts, []);
+});
+
 test('insights report low stock and handle empty sales', () => {
   const result = buildInsights([], [
     { id: 1, name: 'Hết hàng', stock: 0, minStock: 5 },

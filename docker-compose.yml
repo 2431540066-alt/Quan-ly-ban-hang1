@@ -29,6 +29,7 @@ services:
       SMTP_USER: ${SMTP_USER:-}
       SMTP_PASSWORD: ${SMTP_PASSWORD:-}
       SMTP_FROM: ${SMTP_FROM:-}
+      LOW_STOCK_ALERT_EMAIL: ${LOW_STOCK_ALERT_EMAIL:-}
     depends_on: { db: { condition: service_healthy } }
     ports: ["4000:4000"]
     healthcheck:

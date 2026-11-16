@@ -4,7 +4,7 @@
   "scripts": {
     "start": "node src/index.js",
     "seed": "node prisma/seed.js",
-    "test": "node --test src/calc.test.js src/insights.test.js src/order-status.test.js src/payment.test.js src/reports.test.js"
+    "test": "node --test src/calc.test.js src/insights.test.js src/order-status.test.js src/payment.test.js src/product-expiry.test.js src/reports.test.js"
   },
   "dependencies": {
     "@prisma/client": "^6.0.0",

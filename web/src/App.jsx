@@ -578,7 +578,7 @@ function Promotions() {
 
 // ---------- sản phẩm ----------
 function Products() {
-  const empty = { name: '', description: '', imageUrl: '', barcode: '', price: '', cost: 0, minStock: 5, categoryId: '' };
+  const empty = { name: '', description: '', imageUrl: '', barcode: '', price: '', cost: 0, minStock: 5, categoryId: '', expiryDate: '' };
   const [f, setF] = useState(empty), [err, setErr] = useState(''), [ok, setOk] = useState('');
   const [page, setPage] = useState(1), [list, reload] = useLoad(`/products?page=${page}`), [cats, reloadCats] = useLoad('/categories');
   const save = async e => {
@@ -591,14 +591,15 @@ function Products() {
   return (
     <div className="grid lg:grid-cols-[1fr_20rem] gap-4">
       <div className={C.card + ' overflow-x-auto'}>
-        <table className="w-full text-sm"><thead><tr>{['Tên', 'Mã vạch', 'Danh mục', 'Giá bán', 'Giá vốn', 'Tồn', ''].map(h => <th key={h} className={C.th}>{h}</th>)}</tr></thead>
-          <tbody>{list?.items.map(p => <tr key={p.id}><td className={C.td}>{p.imageUrl && <img src={p.imageUrl} alt="" className="inline-block w-10 h-10 object-cover rounded mr-2" />}{p.name}</td><td className={C.td}>{p.barcode}</td><td className={C.td}>{p.category?.name}</td><td className={C.td}>{money(p.price)}</td><td className={C.td}>{money(Math.round(p.cost))}</td><td className={C.td}>{p.stock}</td>
-            <td className={C.td + ' whitespace-nowrap'}><button className="text-teal-800 mr-3" onClick={() => setF({ ...p, categoryId: p.categoryId || '' })}>Sửa</button><button className="text-red-700" onClick={() => del(p)}>Xóa</button></td></tr>)}</tbody></table>
+        <table className="w-full text-sm"><thead><tr>{['Tên', 'Mã vạch', 'Danh mục', 'Giá bán', 'Giá vốn', 'Tồn', 'Hạn dùng', ''].map(h => <th key={h} className={C.th}>{h}</th>)}</tr></thead>
+          <tbody>{list?.items.map(p => <tr key={p.id}><td className={C.td}>{p.imageUrl && <img src={p.imageUrl} alt="" className="inline-block w-10 h-10 object-cover rounded mr-2" />}{p.name}</td><td className={C.td}>{p.barcode}</td><td className={C.td}>{p.category?.name}</td><td className={C.td}>{money(p.price)}</td><td className={C.td}>{money(Math.round(p.cost))}</td><td className={C.td}>{p.stock}</td><td className={C.td}>{p.expiryDate ? new Date(p.expiryDate).toLocaleDateString('vi-VN') : '—'}</td>
+            <td className={C.td + ' whitespace-nowrap'}><button className="text-teal-800 mr-3" onClick={() => setF({ ...p, categoryId: p.categoryId || '', expiryDate: p.expiryDate?.slice(0, 10) || '' })}>Sửa</button><button className="text-red-700" onClick={() => del(p)}>Xóa</button></td></tr>)}</tbody></table>
         <Pager data={list} onChange={setPage} />
       </div>
       <form onSubmit={save} className={C.card + ' space-y-2 h-fit'}>
         <h2 className="font-semibold">{f.id ? 'Sửa sản phẩm' : 'Thêm sản phẩm'}</h2>
         {F('name', 'Tên sản phẩm')}{F('barcode', 'Mã vạch')}{F('price', 'Giá bán (₫)', 'number')}{F('minStock', 'Tồn tối thiểu để cảnh báo', 'number')}
+        {F('expiryDate', 'Hạn sử dụng (để trống nếu không áp dụng)', 'date')}
         {F('imageUrl', 'Đường dẫn ảnh (URL HTTPS khuyến nghị)')}
         <label className="text-sm block">Mô tả sản phẩm<textarea maxLength="2000" rows="3" className={C.inp} value={f.description || ''} onChange={e => setF({ ...f, description: e.target.value })} /></label>
         <label className="text-sm block">Danh mục<div className="flex gap-2"><select className={C.inp} value={f.categoryId} onChange={e => setF({ ...f, categoryId: e.target.value })}><option value="">Chưa phân loại</option>{cats?.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select><button type="button" className={C.btn2} onClick={addCat}>Thêm</button></div></label>
@@ -659,6 +660,7 @@ function Suppliers() {
 function StockList() {
   const [d, reload] = useLoad('/stock'), [act, setAct] = useState({}), [msg, setMsg] = useState(''), [err, setErr] = useState('');
   const low = d?.filter(p => p.stock <= p.minStock) || [];
+  const soon = d?.filter(p => p.stock > 0 && p.expiryDate && new Date(p.expiryDate) <= new Date(Date.now() + 30 * 864e5)) || [];
   const submit = async () => {
     setErr(''); setMsg('');
     try { const r = await api('/stocktakes', { method: 'POST', body: { items: Object.entries(act).filter(([, v]) => v !== '').map(([productId, actual]) => ({ productId, actual })) } }); setMsg(`Đã chốt kiểm kê, điều chỉnh ${r.changed} sản phẩm`); setAct({}); reload(); } catch (x) { setErr(x.message); }
@@ -666,6 +668,7 @@ function StockList() {
   return (
     <div className={C.card + ' overflow-x-auto'}>
       {low.length > 0 && <p className="text-sm bg-amber-50 border border-amber-300 rounded px-3 py-2 mb-3">Sắp hết hàng: {low.map(p => `${p.name} (${p.stock})`).join(', ')}</p>}
+      {soon.length > 0 && <p className="text-sm bg-red-50 border border-red-300 rounded px-3 py-2 mb-3">Sản phẩm hết hạn hoặc sắp hết hạn (30 ngày): {soon.map(p => `${p.name} (${new Date(p.expiryDate).toLocaleDateString('vi-VN')})`).join(', ')}</p>}
       <table className="w-full text-sm"><thead><tr>{['Sản phẩm', 'Tồn hệ thống', 'Tối thiểu', 'Số thực tế (kiểm kê)'].map(h => <th key={h} className={C.th}>{h}</th>)}</tr></thead>
         <tbody>{d?.map(p => <tr key={p.id}><td className={C.td}>{p.name}</td><td className={C.td + (p.stock <= p.minStock ? ' text-red-700 font-semibold' : '')}>{p.stock}</td><td className={C.td}>{p.minStock}</td>
           <td className={C.td}><input type="number" min="0" className="w-28 border rounded px-2 py-1" value={act[p.id] ?? ''} onChange={e => setAct({ ...act, [p.id]: e.target.value })} /></td></tr>)}</tbody></table>
@@ -735,10 +738,19 @@ function Movements() {
 
 // ---------- báo cáo & dự báo ----------
 const iso = d => new Date(d.getTime() + 7 * 36e5).toISOString().slice(0, 10);
+function BreakdownTable({ title, headings, rows, values }) {
+  return <section className={C.card + ' overflow-x-auto'}><h2 className="font-semibold mb-2">{title}</h2>
+    <table className="w-full text-sm"><thead><tr>{headings.map(heading => <th key={heading} className={C.th}>{heading}</th>)}</tr></thead>
+      <tbody>{rows?.map((row, index) => <tr key={index}>{values(row).map((value, cell) => <td key={cell} className={C.td}>{value}</td>)}</tr>)}</tbody>
+    </table>
+    {!rows?.length && <p className="text-sm text-stone-500">Chưa có dữ liệu.</p>}
+  </section>;
+}
 function Reports() {
   const [from, setFrom] = useState(iso(new Date(Date.now() - 29 * 864e5))), [to, setTo] = useState(iso(new Date()));
   const qs = `?from=${from}&to=${to}`;
   const [s, , e1] = useLoad('/reports/summary' + qs), [top, , e2] = useLoad('/reports/top-products' + qs);
+  const [breakdown, , e3] = useLoad('/reports/breakdown' + qs);
   const [insights, reloadInsights, insightError] = useLoad('/assistant/insights');
   const [days, setDays] = useState(7), [fc, setFc] = useState(null), [loading, setLoading] = useState(false), [err, setErr] = useState('');
   const runForecast = async () => { setLoading(true); setErr(''); try { setFc(await api('/forecast?days=' + days)); } catch (x) { setErr(x.message); } finally { setLoading(false); } };
@@ -756,19 +768,22 @@ function Reports() {
         {[['Hôm nay', 0], ['7 ngày', 6], ['30 ngày', 29]].map(([l, n]) => <button key={l} className={C.btn2} onClick={() => { setFrom(iso(new Date(Date.now() - n * 864e5))); setTo(iso(new Date())); }}>{l}</button>)}
         <button className={C.btn} onClick={exportXlsx}>Xuất Excel</button>
       </div>
-      <Msg m={e1 || e2 || err} />
+      <Msg m={e1 || e2 || e3 || err} />
       {s && <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-3">
         <Stat l="Doanh thu sản phẩm (trước giảm giá)" v={money(s.productRevenue)} />
         <Stat l="Giảm giá" v={money(s.discount)} />
         <Stat l="Phí vận chuyển thu" v={money(s.shippingRevenue)} />
+        <Stat l="Hoàn tiền" v={money(s.refunds)} />
+        <Stat l="Đơn đã hoàn tiền" v={s.returnedOrders} />
         <Stat l="Doanh thu thuần sản phẩm" v={money(s.revenue)} />
         <Stat l="Giá vốn hàng bán" v={money(s.cogs)} />
+        <Stat l="Chi phí vận hành" v={money(s.expenses)} />
         <Stat l="Lợi nhuận tạm tính" v={money(s.profit)} />
         <Stat l="Tổng thu đơn hàng" v={money(s.totalCollected)} />
         <Stat l="Số đơn" v={s.orders} />
         <Stat l="Giá trị đơn trung bình" v={money(s.avg)} />
       </div>}
-      {s && <p className="text-xs text-stone-500">Lợi nhuận tạm tính = doanh thu sản phẩm − giảm giá − giá vốn. Chưa trừ phí vận chuyển thực tế, chi phí vận hành, thuế và tiền hoàn trả.</p>}
+      {s && <p className="text-xs text-stone-500">Lợi nhuận tạm tính = doanh thu sản phẩm sau giảm giá + phí vận chuyển thu − giá vốn − chi phí đã ghi nhận. Thuế và các khoản chưa ghi nhận không được tính.</p>}
       <section className={C.card + ' space-y-2'}>
         <div className="flex flex-wrap items-center justify-between gap-2"><h2 className="font-semibold">Trợ lý phân tích và dự báo bán hàng</h2><button className={C.btn2} onClick={reloadInsights}>Cập nhật phân tích</button></div>
         <p className="text-xs text-stone-500">Phân tích tổng hợp theo quy tắc và dự báo chuỗi thời gian Holt-Winters/MA7; không phải chatbot AI hay mô hình ngôn ngữ lớn và không gửi dữ liệu ra dịch vụ bên ngoài.</p>
@@ -780,6 +795,11 @@ function Reports() {
         <div className={C.card}><h2 className="font-semibold mb-2">Doanh thu thuần sản phẩm theo ngày</h2>
           {s?.daily.length ? <div className="h-64"><ResponsiveContainer><BarChart data={s.daily}><XAxis dataKey="date" tickFormatter={d => d.slice(5)} fontSize={12} /><YAxis tickFormatter={v => v / 1000 + 'k'} fontSize={12} width={48} /><Tooltip formatter={v => money(v)} /><Bar dataKey="revenue" fill="#0f766e" /></BarChart></ResponsiveContainer></div> : <p className="text-stone-500 text-sm">Chưa có đơn đã thanh toán trong khoảng thời gian này.</p>}</div>
         <div className={C.card}><h2 className="font-semibold mb-2">Sản phẩm bán chạy</h2><table className="w-full text-sm"><tbody>{top?.map(p => <tr key={p.productId}><td className={C.td}>{p.name}</td><td className={C.td + ' text-right'}>{p.qty}</td></tr>)}</tbody></table></div>
+      </div>
+      <div className="grid lg:grid-cols-3 gap-4">
+        <BreakdownTable title="Doanh thu theo nhân viên" headings={['Nhân viên / kênh', 'Số đơn', 'Đơn hoàn', 'Tổng thu']} rows={breakdown?.employees} values={row => [row.name, row.orders, row.returnedOrders, money(row.revenue)]} />
+        <BreakdownTable title="Doanh thu theo danh mục" headings={['Danh mục', 'Số lượng', 'Doanh thu sản phẩm']} rows={breakdown?.categories} values={row => [row.name, row.quantity, money(row.revenue)]} />
+        <BreakdownTable title="Doanh thu theo thanh toán" headings={['Phương thức', 'Số đơn', 'Đơn hoàn', 'Tổng thu']} rows={breakdown?.payments} values={row => [{ CASH: 'Tiền mặt', TRANSFER: 'Chuyển khoản', COD: 'COD', VNPAY: 'VNPay', MOMO: 'MoMo' }[row.method] || row.method, row.orders, row.returnedOrders, money(row.revenue)]} />
       </div>
       <div className={C.card + ' overflow-x-auto'}>
         <div className="flex items-center gap-3 mb-3"><h2 className="font-semibold">Dự báo nhập hàng</h2>
@@ -794,6 +814,55 @@ function Reports() {
     </div>
   );
 }
+function Expenses() {
+  const today = iso(new Date()), [from, setFrom] = useState(iso(new Date(Date.now() - 29 * 864e5))), [to, setTo] = useState(today);
+  const [page, setPage] = useState(1), [form, setForm] = useState({ category: 'Vận chuyển', description: '', amount: '', occurredAt: today });
+  const [data, reload, loadError] = useLoad(`/expenses?from=${from}&to=${to}&page=${page}`);
+  const [err, setErr] = useState(''), [ok, setOk] = useState('');
+  const save = async event => {
+    event.preventDefault(); setErr(''); setOk('');
+    try {
+      await api(form.id ? `/expenses/${form.id}` : '/expenses', { method: form.id ? 'PUT' : 'POST', body: form });
+      setForm({ category: 'Vận chuyển', description: '', amount: '', occurredAt: today });
+      setOk('Đã lưu chi phí'); reload();
+    } catch (error) { setErr(error.message); }
+  };
+  const remove = async expense => {
+    if (!confirm(`Xóa khoản chi "${expense.description}"?`)) return;
+    try { await api(`/expenses/${expense.id}`, { method: 'DELETE' }); setOk('Đã xóa khoản chi'); reload(); }
+    catch (error) { setErr(error.message); }
+  };
+  return <div className="grid lg:grid-cols-[1fr_20rem] gap-4">
+    <div className={C.card + ' overflow-x-auto'}><Msg m={loadError || err} />
+      <div className="flex flex-wrap gap-2 mb-3"><label className="text-sm">Từ ngày<input className={C.inp} type="date" value={from} onChange={event => { setFrom(event.target.value); setPage(1); }} /></label><label className="text-sm">Đến ngày<input className={C.inp} type="date" value={to} onChange={event => { setTo(event.target.value); setPage(1); }} /></label></div>
+      <table className="w-full text-sm"><thead><tr>{['Ngày', 'Loại', 'Mô tả', 'Số tiền', 'Người ghi', ''].map(label => <th key={label} className={C.th}>{label}</th>)}</tr></thead>
+        <tbody>{data?.items.map(expense => <tr key={expense.id}><td className={C.td}>{new Date(expense.occurredAt).toLocaleDateString('vi-VN')}</td><td className={C.td}>{expense.category}</td><td className={C.td}>{expense.description}</td><td className={C.td}>{money(expense.amount)}</td><td className={C.td}>{expense.createdBy?.name || '—'}</td>
+          <td className={C.td + ' whitespace-nowrap'}><button className="text-teal-800 mr-2" onClick={() => setForm({ id: expense.id, category: expense.category, description: expense.description, amount: expense.amount, occurredAt: expense.occurredAt.slice(0, 10) })}>Sửa</button><button className="text-red-700" onClick={() => remove(expense)}>Xóa</button></td></tr>)}</tbody>
+      </table>
+      <Pager data={data} onChange={setPage} />
+      {!data?.items.length && !loadError && <p className="text-sm text-stone-500 mt-2">Chưa có chi phí trong khoảng thời gian này.</p>}
+    </div>
+    <form onSubmit={save} className={C.card + ' space-y-2 h-fit'}>
+      <h2 className="font-semibold">{form.id ? 'Sửa khoản chi' : 'Ghi nhận chi phí'}</h2>
+      <label className="text-sm block">Loại chi phí<select className={C.inp} value={form.category} onChange={event => setForm({ ...form, category: event.target.value })}>{['Vận chuyển', 'Mặt bằng', 'Nhân sự', 'Điện nước', 'Thuế', 'Khác'].map(category => <option key={category}>{category}</option>)}</select></label>
+      <label className="text-sm block">Mô tả<input required maxLength="300" className={C.inp} value={form.description} onChange={event => setForm({ ...form, description: event.target.value })} /></label>
+      <label className="text-sm block">Số tiền<input required type="number" min="1" step="1" className={C.inp} value={form.amount} onChange={event => setForm({ ...form, amount: event.target.value })} /></label>
+      <label className="text-sm block">Ngày chi<input required type="date" className={C.inp} value={form.occurredAt} onChange={event => setForm({ ...form, occurredAt: event.target.value })} /></label>
+      <Msg m={err} /><Ok m={ok} /><div className="flex gap-2"><button className={C.btn}>Lưu chi phí</button>{form.id && <button type="button" className={C.btn2} onClick={() => setForm({ category: 'Vận chuyển', description: '', amount: '', occurredAt: today })}>Hủy sửa</button>}</div>
+    </form>
+  </div>;
+}
+function AuditHistory() {
+  const [page, setPage] = useState(1), [data, , loadError] = useLoad(`/audit?page=${page}&pageSize=50`);
+  const label = { OWNER: 'Quản trị', SALES: 'Bán hàng', WAREHOUSE: 'Kho' };
+  return <div className={C.card + ' overflow-x-auto'}><Msg m={loadError} />
+    <table className="w-full text-sm"><thead><tr>{['Thời điểm', 'Nhân viên', 'Vai trò', 'Thao tác', 'Đường dẫn', 'Kết quả'].map(heading => <th key={heading} className={C.th}>{heading}</th>)}</tr></thead>
+      <tbody>{data?.items.map(item => <tr key={item.id}><td className={C.td}>{dt(item.createdAt)}</td><td className={C.td}>{item.actorName}</td><td className={C.td}>{label[item.actorRole] || item.actorRole}</td><td className={C.td}>{item.method}</td><td className={C.td}>{item.path}</td><td className={C.td}>{item.statusCode}</td></tr>)}</tbody>
+    </table>
+    <Pager data={data} onChange={setPage} />
+    {!data?.items.length && !loadError && <p className="text-sm text-stone-500 mt-2">Chưa có thao tác nào được ghi nhận.</p>}
+  </div>;
+}
 
 // ---------- khung ứng dụng ----------
 const NAV = [
@@ -804,6 +873,8 @@ const NAV = [
   ['customers', 'Khách hàng', ['SALES'], Customers],
   ['products', 'Sản phẩm', ['WAREHOUSE'], Products],
   ['stock', 'Kho', ['WAREHOUSE'], Stock],
+  ['expenses', 'Chi phí vận hành', ['OWNER'], Expenses],
+  ['audit', 'Lịch sử thao tác', ['OWNER'], AuditHistory],
   ['staff', 'Tài khoản nhân viên', ['OWNER'], Staff],
   ['promotions', 'Khuyến mãi', ['OWNER'], Promotions],
   ['reports', 'Báo cáo, phân tích & dự báo', ['OWNER'], Reports],
