@@ -23,6 +23,9 @@ model User {
   resetTokens     PasswordResetToken[]
   verificationTokens EmailVerificationToken[]
   returnRequests  ReturnRequest[]
+  stockMovements  StockMovement[]        @relation("StockMovementPerformer")
+  receivedReturns ReturnRequest[]        @relation("ReturnReceivedBy")
+  refundedReturns ReturnRequest[]        @relation("ReturnRefundedBy")
 }
 
 model Category {
@@ -137,16 +140,24 @@ model ProductReview {
 }
 
 model ReturnRequest {
-  id        Int      @id @default(autoincrement())
-  orderId   Int      @unique
-  userId    Int
-  reason    String
-  status    String   @default("PENDING") // PENDING | APPROVED | REJECTED
-  staffNote String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  order     Order    @relation(fields: [orderId], references: [id])
-  user      User     @relation(fields: [userId], references: [id])
+  id            Int       @id @default(autoincrement())
+  orderId       Int       @unique
+  userId        Int
+  reason        String
+  status        String    @default("PENDING") // PENDING | APPROVED | RECEIVED | REJECTED
+  refundStatus  String    @default("NOT_STARTED") // NOT_STARTED | PENDING | COMPLETED
+  refundAmount  Int?
+  staffNote     String?
+  receivedAt    DateTime?
+  receivedById  Int?
+  refundedAt    DateTime?
+  refundedById  Int?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  order         Order     @relation(fields: [orderId], references: [id])
+  user          User      @relation(fields: [userId], references: [id])
+  receivedBy    User?     @relation("ReturnReceivedBy", fields: [receivedById], references: [id])
+  refundedBy    User?     @relation("ReturnRefundedBy", fields: [refundedById], references: [id])
 }
 
 model PasswordResetToken {
@@ -211,11 +222,13 @@ model ReceiptItem {
 }
 
 model StockMovement {
-  id        Int      @id @default(autoincrement())
-  productId Int
-  type      String // IN | OUT | ADJUST
-  qty       Int
-  ref       String?
-  createdAt DateTime @default(now())
-  product   Product  @relation(fields: [productId], references: [id])
+  id            Int      @id @default(autoincrement())
+  productId     Int
+  performedById Int?
+  type          String // IN | OUT | ADJUST
+  qty           Int
+  ref           String?
+  createdAt     DateTime @default(now())
+  product       Product  @relation(fields: [productId], references: [id])
+  performedBy   User?    @relation("StockMovementPerformer", fields: [performedById], references: [id])
 }

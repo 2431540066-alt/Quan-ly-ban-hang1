@@ -240,7 +240,12 @@ function CustomerOrders() {
       <div className="flex justify-between font-semibold"><span>Tổng đơn</span><span>{money(order.total)}</span></div>
       {order.status === 'PENDING' && <button className="mt-3 text-red-700" onClick={() => cancel(order.id)}>Hủy đơn</button>}
       {order.status === 'PAID' && !order.returnRequest && Date.now() - new Date(order.completedAt || order.createdAt).getTime() <= 7 * 864e5 && <button className="mt-3 text-teal-800" onClick={() => { setReturnId(order.id); setReason(''); }}>Yêu cầu trả hàng</button>}
-      {order.returnRequest && <p className="text-sm mt-2">Trả hàng: {{ PENDING: 'Chờ duyệt', APPROVED: 'Đã duyệt – liên hệ cửa hàng để hoàn tiền thủ công', REJECTED: 'Bị từ chối' }[order.returnRequest.status]}</p>}
+      {order.returnRequest && <p className="text-sm mt-2">Trả hàng: {{
+        PENDING: 'Chờ duyệt',
+        APPROVED: 'Đã duyệt – chờ cửa hàng nhận hàng',
+        RECEIVED: order.returnRequest.refundStatus === 'COMPLETED' ? `Đã xác nhận hoàn ${money(order.returnRequest.refundAmount)} thủ công` : 'Đã nhận hàng – chờ xác nhận hoàn tiền',
+        REJECTED: 'Bị từ chối',
+      }[order.returnRequest.status]}</p>}
       {returnId === order.id && <form className="mt-3 space-y-2" onSubmit={async event => { event.preventDefault(); try { await api(`/customer/orders/${order.id}/return`, { method: 'POST', body: { reason } }); setOk('Đã gửi yêu cầu trả hàng'); setReturnId(null); reload(); } catch (error) { setErr(error.message); } }}>
         <textarea required minLength="8" maxLength="2000" className={C.inp} placeholder="Lý do trả hàng" value={reason} onChange={event => setReason(event.target.value)} />
         <button className={C.btn}>Gửi yêu cầu</button>
@@ -358,16 +363,31 @@ function Staff() {
 function Returns() {
   const [page, setPage] = useState(1), [data, reload, loadError] = useLoad(`/returns?page=${page}`), [err, setErr] = useState('');
   const decide = async (item, status) => {
-    const staffNote = prompt(status === 'APPROVED' ? 'Duyệt trả hàng. Ghi chú hoàn tiền thủ công (không bắt buộc):' : 'Lý do từ chối:') || '';
+    const staffNote = prompt(status === 'APPROVED' ? 'Ghi chú duyệt trả hàng (không bắt buộc):' : 'Lý do từ chối:') || '';
     try { await api(`/returns/${item.id}`, { method: 'PUT', body: { status, staffNote } }); reload(); }
+    catch (error) { setErr(error.message); }
+  };
+  const receive = async item => {
+    if (!confirm(`Xác nhận đã nhận đủ hàng trả của đơn #${item.orderId}? Hành động này sẽ nhập lại toàn bộ sản phẩm vào kho.`)) return;
+    try { await api(`/returns/${item.id}/receive`, { method: 'POST' }); reload(); }
+    catch (error) { setErr(error.message); }
+  };
+  const refund = async item => {
+    if (!confirm(`Xác nhận cửa hàng đã thực hiện hoàn ${money(item.refundAmount)} cho đơn #${item.orderId} bên ngoài hệ thống?`)) return;
+    const staffNote = prompt('Ghi chú hoàn tiền (không bắt buộc):') || '';
+    try { await api(`/returns/${item.id}/refund`, { method: 'POST', body: { staffNote } }); reload(); }
     catch (error) { setErr(error.message); }
   };
   return <div className="space-y-3"><Msg m={loadError || err} />
     {data?.items.map(item => <article key={item.id} className={C.card}>
-      <div className="flex justify-between"><b>Đơn #{item.orderId} · {item.user.name}</b><span>{item.status === 'PENDING' ? 'Chờ duyệt' : item.status === 'APPROVED' ? 'Đã duyệt' : 'Từ chối'}</span></div>
+      <div className="flex justify-between"><b>Đơn #{item.orderId} · {item.user.name}</b><span>{{ PENDING: 'Chờ duyệt', APPROVED: 'Đã duyệt · chờ nhận hàng', RECEIVED: item.refundStatus === 'COMPLETED' ? 'Đã hoàn tiền' : 'Đã nhận · chờ hoàn tiền', REJECTED: 'Từ chối' }[item.status]}</span></div>
       <p className="text-sm text-stone-500">{dt(item.createdAt)} · {money(item.order.total)}</p><p className="my-2">{item.reason}</p>
+      {item.receivedAt && <p className="text-sm">Đã nhận hàng: {dt(item.receivedAt)} · Hoàn tiền: {money(item.refundAmount)}</p>}
+      {item.refundedAt && <p className="text-sm">Đã xác nhận hoàn tiền: {dt(item.refundedAt)}</p>}
       {item.staffNote && <p className="text-sm">Ghi chú: {item.staffNote}</p>}
-      {item.status === 'PENDING' && <div className="flex gap-2"><button className={C.btn} onClick={() => decide(item, 'APPROVED')}>Duyệt (hoàn tiền thủ công)</button><button className={C.btn2} onClick={() => decide(item, 'REJECTED')}>Từ chối</button></div>}
+      {item.status === 'PENDING' && <div className="flex gap-2"><button className={C.btn} onClick={() => decide(item, 'APPROVED')}>Duyệt yêu cầu</button><button className={C.btn2} onClick={() => decide(item, 'REJECTED')}>Từ chối</button></div>}
+      {item.status === 'APPROVED' && <button className={C.btn} onClick={() => receive(item)}>Xác nhận đã nhận hàng</button>}
+      {item.status === 'RECEIVED' && item.refundStatus === 'PENDING' && <button className={C.btn} onClick={() => refund(item)}>Xác nhận đã hoàn tiền</button>}
     </article>)}
     <Pager data={data} onChange={setPage} />
   </div>;
@@ -708,8 +728,8 @@ function IssueForm() {
 function Movements() {
   const [d] = useLoad('/stock/movements');
   return (
-    <div className={C.card + ' overflow-x-auto'}><table className="w-full text-sm"><thead><tr>{['Thời điểm', 'Sản phẩm', 'Loại', 'Số lượng', 'Chứng từ'].map(h => <th key={h} className={C.th}>{h}</th>)}</tr></thead>
-      <tbody>{d?.map(m => <tr key={m.id}><td className={C.td}>{dt(m.createdAt)}</td><td className={C.td}>{m.product.name}</td><td className={C.td}>{{ IN: 'Nhập', OUT: 'Xuất', ADJUST: 'Điều chỉnh' }[m.type]}</td><td className={C.td + (m.qty < 0 ? ' text-red-700' : ' text-teal-800')}>{m.qty > 0 ? '+' : ''}{m.qty}</td><td className={C.td}>{m.ref}</td></tr>)}</tbody></table></div>
+    <div className={C.card + ' overflow-x-auto'}><table className="w-full text-sm"><thead><tr>{['Thời điểm', 'Sản phẩm', 'Loại', 'Số lượng', 'Chứng từ', 'Người thực hiện'].map(h => <th key={h} className={C.th}>{h}</th>)}</tr></thead>
+      <tbody>{d?.map(m => <tr key={m.id}><td className={C.td}>{dt(m.createdAt)}</td><td className={C.td}>{m.product.name}</td><td className={C.td}>{{ IN: 'Nhập', OUT: 'Xuất', ADJUST: 'Điều chỉnh' }[m.type]}</td><td className={C.td + (m.qty < 0 ? ' text-red-700' : ' text-teal-800')}>{m.qty > 0 ? '+' : ''}{m.qty}</td><td className={C.td}>{m.ref}</td><td className={C.td}>{m.performedBy?.name || 'Hệ thống / dữ liệu cũ'}</td></tr>)}</tbody></table></div>
   );
 }
 
@@ -737,16 +757,27 @@ function Reports() {
         <button className={C.btn} onClick={exportXlsx}>Xuất Excel</button>
       </div>
       <Msg m={e1 || e2 || err} />
-      {s && <div className="grid grid-cols-2 lg:grid-cols-5 gap-3"><Stat l="Doanh thu" v={money(s.revenue)} /><Stat l="Giá vốn hàng bán" v={money(s.cogs)} /><Stat l="Lợi nhuận" v={money(s.profit)} /><Stat l="Số đơn" v={s.orders} /><Stat l="Giá trị đơn trung bình" v={money(s.avg)} /></div>}
+      {s && <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-3">
+        <Stat l="Doanh thu sản phẩm (trước giảm giá)" v={money(s.productRevenue)} />
+        <Stat l="Giảm giá" v={money(s.discount)} />
+        <Stat l="Phí vận chuyển thu" v={money(s.shippingRevenue)} />
+        <Stat l="Doanh thu thuần sản phẩm" v={money(s.revenue)} />
+        <Stat l="Giá vốn hàng bán" v={money(s.cogs)} />
+        <Stat l="Lợi nhuận tạm tính" v={money(s.profit)} />
+        <Stat l="Tổng thu đơn hàng" v={money(s.totalCollected)} />
+        <Stat l="Số đơn" v={s.orders} />
+        <Stat l="Giá trị đơn trung bình" v={money(s.avg)} />
+      </div>}
+      {s && <p className="text-xs text-stone-500">Lợi nhuận tạm tính = doanh thu sản phẩm − giảm giá − giá vốn. Chưa trừ phí vận chuyển thực tế, chi phí vận hành, thuế và tiền hoàn trả.</p>}
       <section className={C.card + ' space-y-2'}>
-        <div className="flex flex-wrap items-center justify-between gap-2"><h2 className="font-semibold">Trợ lý AI nội bộ</h2><button className={C.btn2} onClick={reloadInsights}>Cập nhật phân tích</button></div>
-        <p className="text-xs text-stone-500">Phân tích tự động từ dữ liệu bán hàng và tồn kho của cửa hàng; không gửi dữ liệu ra dịch vụ bên ngoài.</p>
+        <div className="flex flex-wrap items-center justify-between gap-2"><h2 className="font-semibold">Trợ lý phân tích và dự báo bán hàng</h2><button className={C.btn2} onClick={reloadInsights}>Cập nhật phân tích</button></div>
+        <p className="text-xs text-stone-500">Phân tích tổng hợp theo quy tắc và dự báo chuỗi thời gian Holt-Winters/MA7; không phải chatbot AI hay mô hình ngôn ngữ lớn và không gửi dữ liệu ra dịch vụ bên ngoài.</p>
         <Msg m={insightError} />
         {insights?.messages.map((message, index) => <p key={index} className="text-sm">• {message}</p>)}
         {insights && <p className="text-xs text-stone-500">Cơ sở: {insights.basis}</p>}
       </section>
       <div className="grid lg:grid-cols-[2fr_1fr] gap-4">
-        <div className={C.card}><h2 className="font-semibold mb-2">Doanh thu theo ngày</h2>
+        <div className={C.card}><h2 className="font-semibold mb-2">Doanh thu thuần sản phẩm theo ngày</h2>
           {s?.daily.length ? <div className="h-64"><ResponsiveContainer><BarChart data={s.daily}><XAxis dataKey="date" tickFormatter={d => d.slice(5)} fontSize={12} /><YAxis tickFormatter={v => v / 1000 + 'k'} fontSize={12} width={48} /><Tooltip formatter={v => money(v)} /><Bar dataKey="revenue" fill="#0f766e" /></BarChart></ResponsiveContainer></div> : <p className="text-stone-500 text-sm">Chưa có đơn đã thanh toán trong khoảng thời gian này.</p>}</div>
         <div className={C.card}><h2 className="font-semibold mb-2">Sản phẩm bán chạy</h2><table className="w-full text-sm"><tbody>{top?.map(p => <tr key={p.productId}><td className={C.td}>{p.name}</td><td className={C.td + ' text-right'}>{p.qty}</td></tr>)}</tbody></table></div>
       </div>
@@ -775,7 +806,7 @@ const NAV = [
   ['stock', 'Kho', ['WAREHOUSE'], Stock],
   ['staff', 'Tài khoản nhân viên', ['OWNER'], Staff],
   ['promotions', 'Khuyến mãi', ['OWNER'], Promotions],
-  ['reports', 'Báo cáo, AI và dự báo', ['OWNER'], Reports],
+  ['reports', 'Báo cáo, phân tích & dự báo', ['OWNER'], Reports],
   ['my-orders', 'Đơn hàng của tôi', ['CUSTOMER'], CustomerOrders],
   ['favorites', 'Yêu thích', ['CUSTOMER'], Favorites],
   ['account', 'Tài khoản cá nhân', ['CUSTOMER'], CustomerAccount],

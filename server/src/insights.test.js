@@ -3,12 +3,20 @@ const { buildInsights } = require('./insights');
 
 test('insights summarize paid sales and rank products', () => {
   const result = buildInsights([
-    { total: 30000, items: [{ productId: 1, qty: 2, product: { name: 'Nước' } }, { productId: 2, qty: 1, product: { name: 'Bánh' } }] },
-    { total: 20000, items: [{ productId: 1, qty: 3, product: { name: 'Nước' } }] },
+    { discount: 0, items: [{ productId: 1, qty: 2, price: 10000, product: { name: 'Nước' } }, { productId: 2, qty: 1, price: 10000, product: { name: 'Bánh' } }] },
+    { discount: 0, items: [{ productId: 1, qty: 2, price: 10000, product: { name: 'Nước' } }] },
   ], []);
   assert.equal(result.revenue, 50000);
   assert.equal(result.orderCount, 2);
-  assert.deepEqual(result.topProducts[0], { name: 'Nước', qty: 5 });
+  assert.deepEqual(result.topProducts[0], { name: 'Nước', qty: 4 });
+});
+
+test('insights exclude shipping and discount from product revenue', () => {
+  const result = buildInsights([
+    { total: 9500, discount: 1000, items: [{ productId: 1, qty: 1, price: 10000, product: { name: 'Bánh' } }] },
+  ], []);
+  assert.equal(result.revenue, 9000);
+  assert.match(result.messages[0], /doanh thu sản phẩm sau giảm giá 9\.000/);
 });
 
 test('insights report low stock and handle empty sales', () => {

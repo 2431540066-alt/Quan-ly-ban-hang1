@@ -26,10 +26,10 @@ Mã khuyến mãi mẫu: `GIAM10` (10%), `GIAM20K` (20.000 ₫), `HETHAN` (đã 
 ## Chức năng chính
 
 - **Cửa hàng:** tìm kiếm/lọc và phân trang sản phẩm, xem ảnh/mô tả/đánh giá, lưu yêu thích, quản lý hồ sơ/địa chỉ/mật khẩu, đặt COD hoặc thanh toán VNPay/MoMo khi đã cấu hình.
-- **Quản trị viên:** quản lý tài khoản nhân viên, toàn quyền quản lý, báo cáo doanh thu/giá vốn/lợi nhuận, xuất Excel, xem phân tích AI nội bộ, dự báo nhu cầu và đề xuất nhập hàng.
+- **Quản trị viên:** quản lý tài khoản nhân viên, toàn quyền quản lý, báo cáo doanh thu sản phẩm/giảm giá/phí vận chuyển/giá vốn và lợi nhuận tạm tính, xuất Excel, xem phân tích và dự báo bán hàng.
 - **Nhân viên bán hàng:** POS, quét mã vạch, áp dụng khuyến mãi, chọn khách hàng, in hóa đơn; quản lý khách hàng và trạng thái đơn trực tuyến.
 - **Nhân viên kho:** quản lý sản phẩm/ảnh/danh mục, nhà cung cấp, phiếu nhập/xuất, kiểm kê và sổ biến động; cập nhật trạng thái/mã vận đơn, xử lý yêu cầu trả hàng.
-- **Trợ lý phân tích nội bộ:** tổng hợp doanh thu, sản phẩm bán chạy và cảnh báo tồn kho từ dữ liệu cửa hàng. Dự báo nhu cầu sử dụng Holt-Winters so sánh với MA7; không gửi dữ liệu tới dịch vụ AI bên ngoài.
+- **Trợ lý phân tích và dự báo bán hàng:** tổng hợp theo quy tắc doanh thu sản phẩm sau giảm giá, sản phẩm bán chạy và cảnh báo tồn kho; dự báo chuỗi thời gian dùng Holt-Winters/MA7 và so sánh MAE. Đây không phải chatbot AI hay mô hình ngôn ngữ lớn, và không gửi dữ liệu tới dịch vụ bên ngoài.
 
 ## Dữ liệu và vận hành
 
@@ -38,7 +38,9 @@ Mã khuyến mãi mẫu: `GIAM10` (10%), `GIAM20K` (20.000 ₫), `HETHAN` (đã 
 - Đơn POS được ghi thành giao dịch đã thanh toán. Đơn COD trực tuyến giữ tồn ngay khi đặt, cần nhân viên xác nhận → giao hàng → hoàn tất; hủy đơn trước khi giao sẽ hoàn tồn và ghi sổ kho.
 - Giá, khuyến mãi, tổng tiền, phí giao hàng và tồn được xác minh ở máy chủ; thao tác bán/nhập/xuất được thực hiện trong transaction để tránh tồn kho âm hoặc cập nhật dở dang. Danh sách sản phẩm/đơn hàng được phân trang.
 - Phí vận chuyển do cửa hàng tự cấu hình (`SHIPPING_FEE`) và mã vận đơn được nhân viên cập nhật thủ công; hiện chưa gọi API hãng vận chuyển.
-- Yêu cầu trả hàng được mở trong 7 ngày từ lúc hoàn tất đơn; nhân viên duyệt thủ công. Duyệt không tự hoàn tiền hoặc nhập lại kho.
+- Báo cáo tách doanh thu sản phẩm trước giảm giá, giảm giá, phí vận chuyển thu, doanh thu thuần sản phẩm và tổng thu đơn hàng. Lợi nhuận tạm tính = doanh thu sản phẩm − giảm giá − giá vốn; chưa trừ phí vận chuyển thực tế, chi phí vận hành, thuế và tiền hoàn trả.
+- Yêu cầu trả hàng được mở trong 7 ngày từ lúc hoàn tất đơn. Nhân viên duyệt, xác nhận đã nhận hàng (nhập lại kho và ghi sổ), sau đó xác nhận khoản hoàn tiền đã thực hiện thủ công. VNPay/MoMo hiện chưa tích hợp API hoàn tiền; xác nhận trong hệ thống không tự chuyển tiền.
+- Sổ biến động kho lưu nhân viên thực hiện cho các thao tác mới; dữ liệu trước khi có trường này sẽ hiển thị là dữ liệu cũ/không rõ người thực hiện.
 - VNPay/MoMo chỉ được bật khi cấu hình thông tin merchant và callback công khai. IPN/callback kiểm tra chữ ký máy chủ; không coi trang quay về của trình duyệt là nguồn thanh toán duy nhất.
 - Email thông báo cần SMTP và email khách hàng. Lỗi gửi email được ghi vào log máy chủ; đơn hàng vẫn được lưu.
 - Tài khoản mẫu chỉ dành cho phát triển. Trước khi triển khai thật, thay `JWT_SECRET` trong môi trường, đặt mật khẩu riêng, cấu hình HTTPS và sao lưu PostgreSQL thường xuyên. Không sử dụng dữ liệu mẫu trong môi trường thật.

@@ -3,6 +3,7 @@ const express = require('express'), cors = require('cors'), jwt = require('jsonw
 const { PrismaClient } = require('@prisma/client');
 const { calcOrder, avgCost } = require('./calc');
 const { buildInsights } = require('./insights');
+const { summarizeOrders } = require('./reports');
 const { canTransition } = require('./order-status');
 const { momoCreateSigningData, signMomo, signVnpay, verifyMomo, verifyVnpay, vnpayQueryString } = require('./payment');
 const path = require('node:path');
@@ -417,7 +418,7 @@ async function findPromo(code, client = db) {
 app.post('/api/promotions/validate', auth('SALES', 'CUSTOMER'), ah(async (req, res) => res.json(await findPromo((req.body || {}).code))));
 
 // ---- Bán hàng: lưu đơn trong một transaction
-async function createOrder(tx, { userId, items, code, customerId, payment, status = 'PAID', paymentStatus = 'PAID', shippingAddress = null, shippingFee = 0 }) {
+async function createOrder(tx, { userId, performedById = null, items, code, customerId, payment, status = 'PAID', paymentStatus = 'PAID', shippingAddress = null, shippingFee = 0 }) {
   if (!Array.isArray(items) || !items.length) throw new Err('Giỏ hàng trống');
   if (items.length > 100) throw new Err('Đơn hàng không được vượt quá 100 dòng sản phẩm');
   if (items.some(item => !item || typeof item !== 'object')) throw new Err('Dòng sản phẩm trong đơn hàng không hợp lệ');
@@ -455,14 +456,14 @@ async function createOrder(tx, { userId, items, code, customerId, payment, statu
       data: { stock: { decrement: line.qty } },
     });
     if (!updated.count) throw new Err(`"${line.name}" không đủ tồn kho`);
-    await tx.stockMovement.create({ data: { productId: line.productId, type: 'OUT', qty: -line.qty, ref: 'HD' + order.id } });
+    await tx.stockMovement.create({ data: { productId: line.productId, performedById, type: 'OUT', qty: -line.qty, ref: 'HD' + order.id } });
   }
   return order;
 }
 app.post('/api/orders', auth('SALES'), ah(async (req, res) => {
   const { items = [], code, customerId, payment = 'CASH' } = req.body || {};
   res.json(await db.$transaction(tx => createOrder(tx, {
-    userId: req.user.id, items, code, customerId, payment,
+    userId: req.user.id, performedById: req.user.id, items, code, customerId, payment,
   })));
 }));
 app.get('/api/orders', auth('SALES', 'WAREHOUSE'), ah(async (req, res) => {
@@ -491,7 +492,7 @@ app.put('/api/orders/:id/status', auth('SALES', 'WAREHOUSE'), ah(async (req, res
     if (next === 'CANCELLED') {
       for (const item of order.items) {
         await tx.product.update({ where: { id: item.productId }, data: { stock: { increment: item.qty } } });
-        await tx.stockMovement.create({ data: { productId: item.productId, type: 'IN', qty: item.qty, ref: `HD${id}-HUY` } });
+        await tx.stockMovement.create({ data: { productId: item.productId, performedById: req.user.id, type: 'IN', qty: item.qty, ref: `HD${id}-HUY` } });
       }
     }
     return next;
@@ -523,7 +524,7 @@ app.get('/api/customer/orders', auth('CUSTOMER'), ah(async (req, res) => {
   ]);
   res.json(paginated(items, total, pg.page, pg.pageSize));
 }));
-async function cancelOrderAndRestock(tx, id, reason) {
+async function cancelOrderAndRestock(tx, id, reason, performedById = null) {
   const order = await tx.order.findUnique({ where: { id }, include: { items: true } });
   if (!order || order.status !== 'PENDING') return false;
   const changed = await tx.order.updateMany({
@@ -533,7 +534,7 @@ async function cancelOrderAndRestock(tx, id, reason) {
   if (!changed.count) return false;
   for (const item of order.items) {
     await tx.product.update({ where: { id: item.productId }, data: { stock: { increment: item.qty } } });
-    await tx.stockMovement.create({ data: { productId: item.productId, type: 'IN', qty: item.qty, ref: `HD${id}-HUY` } });
+    await tx.stockMovement.create({ data: { productId: item.productId, performedById, type: 'IN', qty: item.qty, ref: `HD${id}-HUY` } });
   }
   console.warn(`Đã hủy đơn #${id}: ${reason}`);
   return true;
@@ -747,7 +748,48 @@ app.put('/api/returns/:id', auth('SALES', 'WAREHOUSE'), ah(async (req, res) => {
     if (!updated.count) throw new Err('Yêu cầu đã được xử lý ở một phiên khác', 409);
     return tx.returnRequest.findUnique({ where: { id }, include: { order: true, user: true } });
   });
-  await sendOrderNotification(result.orderId, `Yêu cầu trả hàng đơn #${result.orderId} đã được xử lý`, `Yêu cầu trả hàng của bạn đã ${status === 'APPROVED' ? 'được duyệt; vui lòng liên hệ cửa hàng để hoàn tiền thủ công' : 'bị từ chối'}.${staffNote ? ` Ghi chú: ${staffNote}` : ''}`);
+  await sendOrderNotification(result.orderId, `Yêu cầu trả hàng đơn #${result.orderId} đã được xử lý`, `Yêu cầu trả hàng của bạn đã ${status === 'APPROVED' ? 'được duyệt; vui lòng gửi hàng về cửa hàng để tiếp tục xử lý' : 'bị từ chối'}.${staffNote ? ` Ghi chú: ${staffNote}` : ''}`);
+  res.json(result);
+}));
+app.post('/api/returns/:id/receive', auth('SALES', 'WAREHOUSE'), ah(async (req, res) => {
+  const id = posInt(req.params.id, 'Yêu cầu trả hàng không hợp lệ');
+  const result = await db.$transaction(async tx => {
+    const request = await tx.returnRequest.findUnique({ where: { id }, include: { order: { include: { items: true } } } });
+    if (!request) throw new Err('Không tìm thấy yêu cầu trả hàng', 404);
+    if (request.status !== 'APPROVED') throw new Err('Chỉ có thể tiếp nhận hàng của yêu cầu đã được duyệt');
+    const receivedAt = new Date();
+    const updated = await tx.returnRequest.updateMany({
+      where: { id, status: 'APPROVED' },
+      data: { status: 'RECEIVED', refundStatus: 'PENDING', refundAmount: request.order.total, receivedAt, receivedById: req.user.id },
+    });
+    if (!updated.count) throw new Err('Yêu cầu đã được cập nhật ở một phiên khác', 409);
+    for (const item of request.order.items) {
+      await tx.product.update({ where: { id: item.productId }, data: { stock: { increment: item.qty } } });
+      await tx.stockMovement.create({
+        data: { productId: item.productId, performedById: req.user.id, type: 'IN', qty: item.qty, ref: `THD${request.orderId}` },
+      });
+    }
+    return tx.returnRequest.findUnique({ where: { id }, include: { order: true, user: true } });
+  });
+  await sendOrderNotification(result.orderId, `Đã tiếp nhận hàng trả đơn #${result.orderId}`, `Cửa hàng đã nhận hàng trả của đơn #${result.orderId}; khoản hoàn ${result.refundAmount.toLocaleString('vi-VN')} VND đang chờ nhân viên xác nhận hoàn tiền.`);
+  res.json(result);
+}));
+app.post('/api/returns/:id/refund', auth('SALES', 'WAREHOUSE'), ah(async (req, res) => {
+  const id = posInt(req.params.id, 'Yêu cầu trả hàng không hợp lệ');
+  const body = req.body || {}, staffNote = String(body.staffNote || '').trim();
+  if (staffNote.length > 1000) throw new Err('Ghi chú không được vượt quá 1000 ký tự');
+  const result = await db.$transaction(async tx => {
+    const request = await tx.returnRequest.findUnique({ where: { id }, include: { order: true } });
+    if (!request) throw new Err('Không tìm thấy yêu cầu trả hàng', 404);
+    if (request.status !== 'RECEIVED' || request.refundStatus !== 'PENDING') throw new Err('Chỉ xác nhận hoàn tiền sau khi đã tiếp nhận hàng trả');
+    const updated = await tx.returnRequest.updateMany({
+      where: { id, status: 'RECEIVED', refundStatus: 'PENDING' },
+      data: { refundStatus: 'COMPLETED', refundedAt: new Date(), refundedById: req.user.id, ...(staffNote ? { staffNote } : {}) },
+    });
+    if (!updated.count) throw new Err('Khoản hoàn tiền đã được cập nhật ở một phiên khác', 409);
+    return tx.returnRequest.findUnique({ where: { id }, include: { order: true, user: true } });
+  });
+  await sendOrderNotification(result.orderId, `Đã hoàn tiền đơn #${result.orderId}`, `Cửa hàng đã xác nhận hoàn ${result.refundAmount.toLocaleString('vi-VN')} VND cho đơn #${result.orderId}.${staffNote ? ` Ghi chú: ${staffNote}` : ''}`);
   res.json(result);
 }));
 
@@ -777,14 +819,14 @@ app.delete('/api/suppliers/:id', WH, ah(async (req, res) => {
   await db.supplier.delete({ where: { id } });
   res.json({ ok: true });
 }));
-async function confirmReceipt(tx, id) {
+async function confirmReceipt(tx, id, performedById) {
   const r = await tx.receipt.findUnique({ where: { id }, include: { items: true } });
   if (!r) throw new Err('Không tìm thấy phiếu', 404);
   if (r.status !== 'DRAFT') throw new Err('Phiếu đã được xác nhận');
   for (const it of r.items) {
     const p = await tx.product.findUnique({ where: { id: it.productId } });
     await tx.product.update({ where: { id: p.id }, data: { stock: p.stock + it.qty, cost: avgCost(p.stock, p.cost, it.qty, it.cost) } });
-    await tx.stockMovement.create({ data: { productId: p.id, type: 'IN', qty: it.qty, ref: 'PN' + id } });
+    await tx.stockMovement.create({ data: { productId: p.id, performedById, type: 'IN', qty: it.qty, ref: 'PN' + id } });
   }
   return tx.receipt.update({ where: { id }, data: { status: 'CONFIRMED' } });
 }
@@ -807,10 +849,10 @@ app.post('/api/receipts', WH, ah(async (req, res) => {
     const total = lines.reduce((s, l) => s + l.qty * l.cost, 0);
     if (!Number.isSafeInteger(total) || total > 2147483647) throw new Err('Tổng tiền phiếu nhập vượt giới hạn cho phép');
     const r = await tx.receipt.create({ data: { supplierId: supplierId ? Number(supplierId) : null, note: note || null, total, items: { create: lines } } });
-    return confirm ? confirmReceipt(tx, r.id) : r;
+    return confirm ? confirmReceipt(tx, r.id, req.user.id) : r;
   }));
 }));
-app.post('/api/receipts/:id/confirm', WH, ah(async (req, res) => res.json(await db.$transaction(tx => confirmReceipt(tx, +req.params.id)))));
+app.post('/api/receipts/:id/confirm', WH, ah(async (req, res) => res.json(await db.$transaction(tx => confirmReceipt(tx, posInt(req.params.id, 'Phiếu không hợp lệ'), req.user.id)))));
 app.get('/api/receipts', WH, ah(async (_, res) => res.json(await db.receipt.findMany({ orderBy: { id: 'desc' }, take: 30, include: { supplier: true, items: { include: { product: true } } } }))));
 app.post('/api/issues', WH, ah(async (req, res) => {
   const body = req.body || {};
@@ -818,7 +860,7 @@ app.post('/api/issues', WH, ah(async (req, res) => {
   await db.$transaction(async tx => {
     const r = await tx.product.updateMany({ where: { id, stock: { gte: qty } }, data: { stock: { decrement: qty } } });
     if (!r.count) throw new Err('Không đủ tồn kho để xuất');
-    await tx.stockMovement.create({ data: { productId: id, type: 'OUT', qty: -qty, ref: 'PX: ' + (body.note || 'xuất kho') } });
+    await tx.stockMovement.create({ data: { productId: id, performedById: req.user.id, type: 'OUT', qty: -qty, ref: 'PX: ' + (body.note || 'xuất kho') } });
   });
   res.json({ ok: true });
 }));
@@ -843,7 +885,7 @@ app.post('/api/stocktakes', WH, ah(async (req, res) => {
       const p = await tx.product.findUnique({ where: { id: it.productId } });
       if (!p || p.stock === actual) continue;
       await tx.product.update({ where: { id: p.id }, data: { stock: actual } });
-      await tx.stockMovement.create({ data: { productId: p.id, type: 'ADJUST', qty: actual - p.stock, ref } });
+      await tx.stockMovement.create({ data: { productId: p.id, performedById: req.user.id, type: 'ADJUST', qty: actual - p.stock, ref } });
       changed++;
     }
   });
@@ -853,7 +895,7 @@ app.get('/api/stock', WH, ah(async (req, res) => {
   const all = await db.product.findMany({ orderBy: { name: 'asc' } });
   res.json(req.query.low === 'true' ? all.filter(p => p.stock <= p.minStock) : all);
 }));
-app.get('/api/stock/movements', WH, ah(async (_, res) => res.json(await db.stockMovement.findMany({ orderBy: { id: 'desc' }, take: 100, include: { product: true } }))));
+app.get('/api/stock/movements', WH, ah(async (_, res) => res.json(await db.stockMovement.findMany({ orderBy: { id: 'desc' }, take: 100, include: { product: true, performedBy: { select: { name: true } } } }))));
 
 // ---- Báo cáo (chỉ chủ cửa hàng)
 const OWN = auth('OWNER');
@@ -866,12 +908,7 @@ function range(q) {
 }
 const paid = q => db.order.findMany({ where: { status: 'PAID', createdAt: range(q) }, include: { items: { include: { product: true } } } });
 async function summary(q) {
-  const orders = await paid(q); let revenue = 0, cogs = 0; const daily = {};
-  for (const o of orders) {
-    revenue += o.total; cogs += o.items.reduce((s, i) => s + i.cost * i.qty, 0);
-    daily[day(o.createdAt)] = (daily[day(o.createdAt)] || 0) + o.total;
-  }
-  return { revenue, cogs: Math.round(cogs), profit: Math.round(revenue - cogs), orders: orders.length, avg: orders.length ? Math.round(revenue / orders.length) : 0, daily: Object.entries(daily).sort().map(([date, revenue]) => ({ date, revenue })) };
+  return summarizeOrders(await paid(q));
 }
 app.get('/api/reports/summary', OWN, ah(async (req, res) => res.json(await summary(req.query))));
 app.get('/api/reports/top-products', OWN, ah(async (req, res) => {
@@ -887,7 +924,7 @@ app.get('/api/assistant/insights', OWN, ah(async (_, res) => {
   const [orders, products] = await Promise.all([
     db.order.findMany({
       where: { status: 'PAID', createdAt: { gte: since } },
-      select: { total: true, items: { select: { productId: true, qty: true, product: { select: { name: true } } } } },
+      select: { total: true, discount: true, items: { select: { productId: true, qty: true, price: true, product: { select: { name: true } } } } },
     }),
     db.product.findMany({ select: { id: true, name: true, stock: true, minStock: true } }),
   ]);
@@ -896,9 +933,19 @@ app.get('/api/assistant/insights', OWN, ah(async (_, res) => {
 app.get('/api/reports/export', OWN, ah(async (req, res) => {
   if ((req.query.format || 'xlsx') !== 'xlsx') throw new Err('Hiện chỉ hỗ trợ xuất Excel (xlsx)');
   const s = await summary(req.query), wb = new ExcelJS.Workbook(), ws = wb.addWorksheet('Tổng quan');
-  ws.addRows([['Doanh thu', s.revenue], ['Giá vốn', s.cogs], ['Lợi nhuận', s.profit], ['Số đơn', s.orders], ['Giá trị đơn TB', s.avg]]);
-  const d = wb.addWorksheet('Doanh thu theo ngày'); d.addRow(['Ngày', 'Doanh thu']).font = { bold: true }; s.daily.forEach(r => d.addRow([r.date, r.revenue]));
-  ws.getColumn(1).width = 20; d.getColumn(1).width = 14; d.getColumn(2).width = 16;
+  ws.addRows([
+    ['Doanh thu sản phẩm (trước giảm giá)', s.productRevenue],
+    ['Giảm giá', s.discount],
+    ['Phí vận chuyển thu', s.shippingRevenue],
+    ['Doanh thu thuần sản phẩm', s.revenue],
+    ['Giá vốn hàng bán', s.cogs],
+    ['Lợi nhuận tạm tính', s.profit],
+    ['Tổng thu đơn hàng', s.totalCollected],
+    ['Số đơn', s.orders],
+    ['Giá trị đơn TB', s.avg],
+  ]);
+  const d = wb.addWorksheet('Doanh thu theo ngày'); d.addRow(['Ngày', 'Doanh thu thuần sản phẩm']).font = { bold: true }; s.daily.forEach(r => d.addRow([r.date, r.revenue]));
+  ws.getColumn(1).width = 40; ws.getColumn(2).width = 20; d.getColumn(1).width = 14; d.getColumn(2).width = 30;
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   res.setHeader('Content-Disposition', 'attachment; filename=bao-cao.xlsx');
   res.send(Buffer.from(await wb.xlsx.writeBuffer()));

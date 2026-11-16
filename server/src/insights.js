@@ -1,5 +1,6 @@
 function buildInsights(orders, products) {
-  const revenue = orders.reduce((sum, order) => sum + order.total, 0);
+  const revenue = orders.reduce((sum, order) =>
+    sum + order.items.reduce((sales, item) => sales + (item.price || 0) * item.qty, 0) - (order.discount || 0), 0);
   const quantityByProduct = new Map();
   for (const order of orders) {
     for (const item of order.items) {
@@ -17,7 +18,7 @@ function buildInsights(orders, products) {
 
   if (!orders.length) messages.push('Chưa có đơn đã thanh toán trong 30 ngày gần đây; hãy thu thập dữ liệu bán hàng để cải thiện phân tích.');
   else {
-    messages.push(`30 ngày gần đây có ${orders.length} đơn đã thanh toán, doanh thu ${revenue.toLocaleString('vi-VN')} ₫.`);
+    messages.push(`30 ngày gần đây có ${orders.length} đơn đã thanh toán, doanh thu sản phẩm sau giảm giá ${revenue.toLocaleString('vi-VN')} ₫ (chưa gồm phí vận chuyển).`);
     if (topProducts.length) messages.push(`Sản phẩm bán nhiều nhất là ${topProducts[0].name} (${topProducts[0].qty} sản phẩm).`);
   }
   if (lowStock.length) messages.push(`Có ${lowStock.length} sản phẩm chạm hoặc thấp hơn mức tồn tối thiểu: ${lowStock.slice(0, 5).map(product => `${product.name} (${product.stock}/${product.minStock})`).join(', ')}.`);
@@ -25,7 +26,7 @@ function buildInsights(orders, products) {
 
   return {
     generatedAt: new Date().toISOString(),
-    basis: 'Phân tích nội bộ từ đơn đã thanh toán và tồn kho; dự báo nhu cầu dùng Holt-Winters/MA7.',
+    basis: 'Phân tích quy tắc nội bộ từ đơn đã thanh toán và tồn kho; dự báo chuỗi thời gian dùng Holt-Winters/MA7 và so sánh MAE. Không phải chatbot AI hay mô hình ngôn ngữ lớn.',
     revenue,
     orderCount: orders.length,
     topProducts,
