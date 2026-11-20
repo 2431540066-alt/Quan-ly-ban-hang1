@@ -74,3 +74,7 @@ Sandbox payment callbacks không thể gọi địa chỉ localhost. Dùng domai
 cd server
 npm test
 ```
+
+## Tài liệu dự án
+
+Các tài liệu ERD, Use Case, test case, hướng dẫn demo/cài đặt, sao lưu và cấu trúc báo cáo đồ án nằm trong thư mục [docs/](docs/).
